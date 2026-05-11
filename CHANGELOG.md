@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Icon-only buttons are square (28x28 in toolbars, 24x24 in port rows): added `size="icon"` and `size="icon-sm"` to `UIButton`
+- Port row layout reworked: PID is now a column of its own (no more inline middle-dot separator)
+- `ProjectDetail` shows column headers above the port list: Service, Process, PID, Port
+- Per-row action slots (kill, remove) reserve their width even when not applicable, so rows stay vertically aligned regardless of port state
+
 ## [0.8.0] - 2026-05-11
 
 ### Added

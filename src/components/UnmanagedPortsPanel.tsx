@@ -64,34 +64,40 @@ export function UnmanagedPortsPanel({ ports, onKill }: UnmanagedPortsPanelProps)
       ) : (
         <div className="flex flex-col">
           <div className="flex items-center gap-[var(--spacing-2)] pb-[var(--spacing-2)] mb-[var(--spacing-1)] border-b border-border-subtle">
-            <div className="w-5" />
-            <UIText variant="label" className="w-20">Port</UIText>
-            <UIText variant="label" className="flex-1">Process</UIText>
+            <div className="w-5 shrink-0" />
+            <UIText variant="label" className="flex-1 min-w-0">Process</UIText>
             <UIText variant="label" className="w-16 text-right">PID</UIText>
+            <UIText variant="label" className="w-14 text-right">Port</UIText>
+            <div className="w-6 shrink-0" />
           </div>
           {ports.map((port) => (
             <div
               key={port.port}
               className="flex items-center gap-[var(--spacing-2)] h-9 hover:bg-bg-elevated rounded-[var(--radius-sm)] px-[var(--spacing-1)] group"
             >
-              <div className="w-5 flex justify-center">
+              <div className="w-5 flex justify-center shrink-0">
                 <UIStatus active={true} />
               </div>
-              <UIPortLink port={port.port} className="w-20 text-left" />
-              <UIText variant="body" className="flex-1 truncate">
+              <UIText variant="body" className="flex-1 min-w-0 truncate">
                 {port.process}
               </UIText>
-              <UIText variant="mono" className="w-16 text-right text-text-secondary text-[11px]!">
+              <UIText variant="mono" className="w-16 text-right text-text-secondary text-[11px]! tabular-nums">
                 {port.pid}
               </UIText>
-              <UIButton
-                variant="ghost"
-                className="opacity-0 group-hover:opacity-100 p-1 text-accent-danger hover:bg-accent-danger-soft hover:text-accent-danger"
-                title="Stop process on this port"
-                onClick={() => handleKill(port)}
-              >
-                <Power size={14} />
-              </UIButton>
+              <div className="w-14 flex justify-end">
+                <UIPortLink port={port.port} />
+              </div>
+              <div className="w-6 flex justify-center shrink-0">
+                <UIButton
+                  variant="ghost"
+                  size="icon-sm"
+                  className="opacity-0 group-hover:opacity-100 text-accent-danger hover:bg-accent-danger-soft hover:text-accent-danger"
+                  title="Stop process on this port"
+                  onClick={() => handleKill(port)}
+                >
+                  <Power size={14} />
+                </UIButton>
+              </div>
             </div>
           ))}
         </div>

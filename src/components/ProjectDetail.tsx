@@ -146,6 +146,7 @@ export function ProjectDetail({
             <>
               <UIButton
                 variant="ghost"
+                size="icon"
                 title="Open in Finder"
                 onClick={() => cmd.openInFinder(project.path!)}
               >
@@ -153,6 +154,7 @@ export function ProjectDetail({
               </UIButton>
               <UIButton
                 variant="ghost"
+                size="icon"
                 title="Open in Terminal"
                 onClick={() => cmd.openInTerminal(project.path!)}
               >
@@ -162,6 +164,7 @@ export function ProjectDetail({
           )}
           <UIButton
             variant="ghost"
+            size="icon"
             onClick={handleKillAll}
             disabled={activePorts === 0}
             title={
@@ -175,6 +178,7 @@ export function ProjectDetail({
           </UIButton>
           <UIButton
             variant="danger"
+            size="icon"
             onClick={handleDelete}
             title="Remove project"
           >
@@ -223,7 +227,17 @@ export function ProjectDetail({
           No ports registered
         </p>
       ) : (
-        <div className="flex flex-col gap-[var(--spacing-1)]">
+        <div className="flex flex-col">
+          {/* Column header - widths must match PortRow exactly. */}
+          <div className="flex items-center gap-[var(--spacing-2)] h-7 pb-[var(--spacing-2)] mb-[var(--spacing-1)] border-b border-border-subtle">
+            <div className="w-5 shrink-0" />
+            <UIText variant="label" className="flex-1 min-w-0">Service</UIText>
+            <UIText variant="label" className="w-32">Process</UIText>
+            <UIText variant="label" className="w-16 text-right">PID</UIText>
+            <UIText variant="label" className="w-14 text-right">Port</UIText>
+            <div className="w-6 shrink-0" />
+            <div className="w-6 shrink-0" />
+          </div>
           {project.ports.map((port) => (
             <PortRow
               key={port.id}
