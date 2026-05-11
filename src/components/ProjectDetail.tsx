@@ -141,48 +141,67 @@ export function ProjectDetail({
             </UIText>
           )}
         </div>
-        <div className="flex items-center gap-[var(--spacing-1)]">
+        {/* Toolbar split into two groups so navigation actions (open path)
+            don't sit next to destructive actions (stop processes, delete project).
+            A subtle vertical divider reinforces the separation. */}
+        <div className="flex items-center gap-[var(--spacing-3)]">
           {project.path && (
-            <>
+            <div className="flex items-center gap-[var(--spacing-1)]">
               <UIButton
                 variant="ghost"
                 size="icon"
                 title="Open in Finder"
+                aria-label="Open project folder in Finder"
                 onClick={() => cmd.openInFinder(project.path!)}
               >
-                <FolderOpen size={16} />
+                <FolderOpen size={16} aria-hidden="true" />
               </UIButton>
               <UIButton
                 variant="ghost"
                 size="icon"
                 title="Open in Terminal"
+                aria-label="Open project folder in Terminal"
                 onClick={() => cmd.openInTerminal(project.path!)}
               >
-                <Terminal size={16} />
+                <Terminal size={16} aria-hidden="true" />
               </UIButton>
-            </>
+            </div>
           )}
-          <UIButton
-            variant="ghost"
-            size="icon"
-            onClick={handleKillAll}
-            disabled={activePorts === 0}
-            title={
-              activePorts === 0
-                ? "No active ports to stop"
-                : `Stop all ${activePorts} active port${activePorts === 1 ? "" : "s"}`
-            }
-          >
-            <Power size={16} />
-          </UIButton>
-          <UIButton
-            variant="danger"
-            size="icon"
-            onClick={handleDelete}
-            title="Remove project"
-          >
-            <Trash2 size={16} />
-          </UIButton>
+          {project.path && (
+            <div
+              aria-hidden="true"
+              className="h-5 w-px bg-border-subtle"
+            />
+          )}
+          <div className="flex items-center gap-[var(--spacing-1)]">
+            <UIButton
+              variant="warning"
+              size="icon"
+              onClick={handleKillAll}
+              disabled={activePorts === 0}
+              title={
+                activePorts === 0
+                  ? "No active ports to stop"
+                  : `Stop all ${activePorts} active port${activePorts === 1 ? "" : "s"}`
+              }
+              aria-label={
+                activePorts === 0
+                  ? "No active ports to stop"
+                  : `Stop all ${activePorts} active port${activePorts === 1 ? "" : "s"}`
+              }
+            >
+              <Power size={16} aria-hidden="true" />
+            </UIButton>
+            <UIButton
+              variant="danger"
+              size="icon"
+              onClick={handleDelete}
+              title="Remove project"
+              aria-label={`Delete project ${project.name}`}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+            </UIButton>
+          </div>
         </div>
       </div>
 
@@ -202,8 +221,10 @@ export function ProjectDetail({
         <UIButton
           variant="ghost"
           onClick={() => setShowAddPort(!showAddPort)}
+          aria-expanded={showAddPort}
+          aria-label={showAddPort ? "Close add port form" : "Add a new port to this project"}
         >
-          <Plus size={16} />
+          <Plus size={16} aria-hidden="true" />
           Add
         </UIButton>
       </div>

@@ -89,13 +89,14 @@ export function UnmanagedPortsPanel({ ports, onKill }: UnmanagedPortsPanelProps)
               </div>
               <div className="w-6 flex justify-center shrink-0">
                 <UIButton
-                  variant="ghost"
+                  variant="warning"
                   size="icon-sm"
                   className="opacity-0 group-hover:opacity-100"
                   title="Stop process on this port"
+                  aria-label={`Stop process on port ${port.port}`}
                   onClick={() => handleKill(port)}
                 >
-                  <Power size={14} />
+                  <Power size={14} aria-hidden="true" />
                 </UIButton>
               </div>
             </div>

@@ -6,6 +6,7 @@ import { ProjectDetail } from "@/components/ProjectDetail";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { UnmanagedPortsPanel } from "@/components/UnmanagedPortsPanel";
 import { PopoverPanel } from "@/components/PopoverPanel";
+import { WelcomePanel } from "@/components/WelcomePanel";
 import { UIText } from "@/components/ui/UIText";
 import { ToastProvider } from "@/lib/toast";
 import { DialogProvider } from "@/lib/dialog";
@@ -13,6 +14,7 @@ import { useProjects } from "@/features/projects/useProjects";
 import type { ProjectStatus } from "@/lib/types";
 
 type View = "project" | "unmanaged" | "settings";
+type SettingsTab = "general" | "integrations" | "data";
 
 function MainWindow() {
   const {
@@ -28,6 +30,7 @@ function MainWindow() {
   } = useProjects();
   const [selected, setSelected] = useState<ProjectStatus | null>(null);
   const [activeView, setActiveView] = useState<View>("project");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
 
   const currentProject = selected
     ? projects.find((p) => p.id === selected.id) ?? null
@@ -38,7 +41,8 @@ function MainWindow() {
     setActiveView("project");
   };
 
-  const handleShowSettings = () => {
+  const handleShowSettings = (tab?: SettingsTab) => {
+    if (tab) setSettingsTab(tab);
     setActiveView("settings");
   };
 
@@ -71,7 +75,7 @@ function MainWindow() {
               </UIText>
             </div>
           ) : activeView === "settings" ? (
-            <SettingsPanel />
+            <SettingsPanel tab={settingsTab} onTabChange={setSettingsTab} />
           ) : activeView === "unmanaged" ? (
             <UnmanagedPortsPanel ports={unmanagedPorts} onKill={killPort} />
           ) : currentProject ? (
@@ -87,11 +91,13 @@ function MainWindow() {
               onKillProject={killProject}
             />
           ) : (
-            <div className="flex items-center justify-center h-full">
-              <UIText variant="body" className="text-text-muted">
-                Select a project from the sidebar
-              </UIText>
-            </div>
+            <WelcomePanel
+              projects={projects}
+              unmanagedPorts={unmanagedPorts}
+              onCreate={create}
+              onShowSettings={handleShowSettings}
+              onShowUnmanaged={handleShowUnmanaged}
+            />
           )}
         </main>
       </div>

@@ -1,6 +1,6 @@
 import { type ReactNode, type ButtonHTMLAttributes } from "react";
 
-type ButtonVariant = "primary" | "ghost" | "danger";
+type ButtonVariant = "primary" | "ghost" | "warning" | "danger";
 type ButtonSize = "default" | "icon" | "icon-sm";
 
 interface UIButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -13,11 +13,16 @@ interface UIButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 // solid tokens so the contrast is visible regardless of whether the underlying
 // row is on bg-deep, bg-surface, or bg-elevated. A solid bg-elevated hover
 // disappears when the row itself already paints bg-elevated on hover.
+// `warning` (amber) sits between ghost and danger: stopping a process is
+// destructive against the *target* but not against portsage data, so it
+// warrants an alert tint without the full red of `danger`.
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
     "bg-accent-amber text-bg-deep hover:bg-accent-amber/90 border-transparent",
   ghost:
     "bg-transparent text-text-secondary hover:text-text-primary hover:bg-white/10 border-transparent",
+  warning:
+    "bg-transparent text-accent-amber hover:bg-accent-amber/15 hover:text-accent-amber border-transparent",
   danger:
     "bg-transparent text-accent-danger hover:bg-accent-danger/20 hover:text-accent-danger border-transparent",
 };

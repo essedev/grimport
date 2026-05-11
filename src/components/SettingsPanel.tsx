@@ -5,7 +5,18 @@ import { UIInput } from "@/components/ui/UIInput";
 import { UIDivider } from "@/components/ui/UIDivider";
 import { UIBadge } from "@/components/ui/UIBadge";
 import { UISelect } from "@/components/ui/UISelect";
-import { CheckCircle, XCircle, Download, Upload, Trash2, Save, Copy, Check } from "lucide-react";
+import { UITabs, UITabPanel } from "@/components/ui/UITabs";
+import {
+  CheckCircle,
+  XCircle,
+  Download,
+  Upload,
+  Trash2,
+  Save,
+  Copy,
+  Check,
+  ChevronRight,
+} from "lucide-react";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { useConfirm } from "@/lib/dialog";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -20,17 +31,10 @@ type McpClient = {
   label: string;
   configPath: string;
   rulesPath: string | null;
-  // mcpServers: Cursor, Claude Desktop, Cline, Windsurf - root key {"mcpServers": {...}}
-  // vscodeServers: VS Code Copilot - root key {"servers": {...}}
-  // toml: Codex - [mcp_servers.name] sections
   format: "mcpServers" | "vscodeServers" | "toml";
-  // Frontmatter wrapper used when generating the rules file content. null = no rules support.
   rulesFormat?: "cursor" | "windsurf";
 };
 
-// Ordered by actual MCP usage relevance (not just editor user base).
-// Removed: Continue (declining, surclassed by Cline), Zed (too niche).
-// Update as the ecosystem shifts.
 const MCP_CLIENTS: McpClient[] = [
   { value: "cursor", label: "Cursor", configPath: "~/.cursor/mcp.json", rulesPath: ".cursor/rules/portsage.mdc", rulesFormat: "cursor", format: "mcpServers" },
   { value: "claude-desktop", label: "Claude Desktop", configPath: "~/Library/Application Support/Claude/claude_desktop_config.json", rulesPath: null, format: "mcpServers" },
@@ -47,7 +51,6 @@ command = "uv"
 args = ["--directory", "${mcpDir}", "run", "python", "server.py"]`;
   }
 
-  // VS Code Copilot uses "servers" as the root key, all others use "mcpServers".
   const key = client.format === "vscodeServers" ? "servers" : "mcpServers";
   const obj = {
     [key]: {
@@ -60,17 +63,12 @@ args = ["--directory", "${mcpDir}", "run", "python", "server.py"]`;
   return JSON.stringify(obj, null, 2);
 }
 
-// Source of truth: mcp/SKILL.md - imported raw at build time so it stays in sync.
-// Strip the YAML frontmatter (between --- markers at top) so we can re-wrap with the
-// editor-specific frontmatter that each rules format requires.
 const SKILL_BODY = skillMd.replace(/^---\n[\s\S]*?\n---\n+/, "");
 
 const SKILL_DESCRIPTION =
   "Manages port allocation across development projects. Use it when you need to assign ports to a new project, register services, or check which ports are in use.";
 
 function generateRulesContent(client: McpClient): string {
-  // Cursor .mdc: agent-mode rule (description present, no globs, alwaysApply false).
-  // The AI decides when to attach the rule based on the description.
   if (client.rulesFormat === "cursor") {
     return `---
 description: ${SKILL_DESCRIPTION}
@@ -79,8 +77,6 @@ alwaysApply: false
 
 ${SKILL_BODY}`;
   }
-  // Windsurf .md: model_decision trigger - the model attaches the rule when the
-  // description matches the current task context.
   if (client.rulesFormat === "windsurf") {
     return `---
 trigger: model_decision
@@ -89,7 +85,6 @@ description: ${SKILL_DESCRIPTION}
 
 ${SKILL_BODY}`;
   }
-  // Fallback: raw markdown body, no frontmatter.
   return SKILL_BODY;
 }
 
@@ -126,9 +121,25 @@ function CodeBlock({ code, label }: { code: string; label: string }) {
   );
 }
 
-export function SettingsPanel() {
+export type SettingsTab = "general" | "integrations" | "data";
+
+interface SettingsPanelProps {
+  // Optional controlled tab state, used for deep-linking from other panels
+  // (e.g. WelcomePanel jumping to "integrations"). Falls back to internal
+  // state when not provided.
+  tab?: SettingsTab;
+  onTabChange?: (tab: SettingsTab) => void;
+}
+
+export function SettingsPanel({ tab: controlledTab, onTabChange }: SettingsPanelProps = {}) {
   const { showSuccess, showError } = useToast();
   const confirm = useConfirm();
+  const [internalTab, setInternalTab] = useState<SettingsTab>("general");
+  const tab = controlledTab ?? internalTab;
+  const setTab = (next: SettingsTab) => {
+    setInternalTab(next);
+    onTabChange?.(next);
+  };
   const [mcpInstalled, setMcpInstalled] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
   const [basePort, setBasePort] = useState("");
@@ -137,6 +148,7 @@ export function SettingsPanel() {
   const [autostart, setAutostart] = useState(false);
   const [mcpDir, setMcpDir] = useState("");
   const [selectedClient, setSelectedClient] = useState("cursor");
+  const [otherEditorsOpen, setOtherEditorsOpen] = useState(false);
   const [version, setVersion] = useState("");
 
   const checkMcp = async () => {
@@ -237,8 +249,6 @@ export function SettingsPanel() {
         multiple: false,
       });
       if (!path) return;
-      // Import overwrites the entire database with the contents of the archive.
-      // Confirm explicitly so the user can't lose their current data with a single click.
       const ok = await confirm({
         title: "Replace current data",
         message:
@@ -267,217 +277,257 @@ export function SettingsPanel() {
     }
   };
 
+  const otherClient = MCP_CLIENTS.find((c) => c.value === selectedClient);
+
   return (
-    <div className="flex flex-col gap-[var(--spacing-6)] p-[var(--spacing-5)]">
-      <UIText variant="title" as="h2">
-        Settings
-      </UIText>
-
-      <UIDivider />
-
-      {/* Port Config Section */}
-      <div className="flex flex-col gap-[var(--spacing-3)]">
-        <UIText variant="section" as="h3">
-          Port configuration
+    <div className="flex flex-col h-full">
+      <div className="flex flex-col gap-[var(--spacing-4)] px-[var(--spacing-5)] pt-[var(--spacing-5)] pb-[var(--spacing-2)]">
+        <UIText variant="title" as="h2">
+          Settings
         </UIText>
 
-        <label className="inline-flex items-center gap-[var(--spacing-2)] cursor-pointer w-fit">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={autostart}
-            onClick={handleToggleAutostart}
-            className={`
-              relative inline-flex h-[18px] w-[32px] shrink-0 items-center
-              rounded-full border border-transparent transition-colors duration-200 cursor-pointer
-              ${autostart ? "bg-accent-amber" : "bg-status-inactive"}
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-amber focus-visible:ring-offset-2 focus-visible:ring-offset-bg-deep
-            `}
-          >
-            <span
-              className={`
-                inline-block h-[14px] w-[14px] rounded-full bg-white
-                transition-transform duration-200 shadow-sm
-                ${autostart ? "translate-x-[16px]" : "translate-x-[2px]"}
-              `}
-            />
-          </button>
-          <UIText variant="body">Launch at login</UIText>
-        </label>
-
-        <UIDivider />
-
-        <UIText variant="section" as="h3">
-          Port range
-        </UIText>
-
-        <UIText variant="body" className="text-text-secondary">
-          Changes only affect new projects. Already assigned ranges stay the same.
-        </UIText>
-
-        <div className="flex items-end gap-[var(--spacing-3)]">
-          <UIInput
-            label="Base port"
-            type="number"
-            value={basePort}
-            onChange={(e) => setBasePort(e.target.value)}
-            wrapperClassName="w-32"
-          />
-          <UIInput
-            label="Range size"
-            type="number"
-            value={rangeSize}
-            onChange={(e) => setRangeSize(e.target.value)}
-            wrapperClassName="w-32"
-          />
-          <UIButton variant="primary" onClick={handleSaveConfig}>
-            <Save size={14} />
-            {configSaved ? "Saved" : "Save"}
-          </UIButton>
-        </div>
+        <UITabs<SettingsTab>
+          ariaLabel="Settings sections"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "general", label: "General" },
+            { value: "integrations", label: "Integrations" },
+            { value: "data", label: "Data" },
+          ]}
+        />
       </div>
 
-      <UIDivider />
-
-      {/* MCP Section */}
-      <div className="flex flex-col gap-[var(--spacing-3)]">
-        <UIText variant="section" as="h3">
-          MCP integration
-        </UIText>
-
-        {/* Claude Code - Auto Install */}
-        <div className="flex flex-col gap-[var(--spacing-2)]">
-          <UIText variant="label">Claude Code</UIText>
-          <div className="flex items-center gap-[var(--spacing-3)]">
-            {mcpInstalled === null ? (
-              <UIText variant="body" className="text-text-muted">
-                Checking...
+      <div className="flex-1 overflow-y-auto px-[var(--spacing-5)] pb-[var(--spacing-5)]">
+        <UITabPanel value="general" active={tab}>
+          <div className="flex flex-col gap-[var(--spacing-5)]">
+            <section className="flex flex-col gap-[var(--spacing-3)]">
+              <UIText variant="section" as="h3">
+                Launch
               </UIText>
-            ) : mcpInstalled ? (
-              <>
-                <UIBadge variant="active">
-                  <CheckCircle size={12} />
-                  Connected
-                </UIBadge>
-                <UIButton variant="danger" onClick={handleUninstall}>
-                  <Trash2 size={14} />
-                  Remove
-                </UIButton>
-              </>
-            ) : (
-              <>
-                <UIBadge variant="inactive">
-                  <XCircle size={12} />
-                  Not connected
-                </UIBadge>
-                <UIButton
-                  variant="primary"
-                  onClick={handleInstall}
-                  disabled={installing}
+              <label className="inline-flex items-center gap-[var(--spacing-2)] cursor-pointer w-fit">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autostart}
+                  aria-label="Launch at login"
+                  onClick={handleToggleAutostart}
+                  className={`
+                    relative inline-flex h-[18px] w-[32px] shrink-0 items-center
+                    rounded-full border border-transparent transition-colors duration-200 cursor-pointer
+                    ${autostart ? "bg-accent-amber" : "bg-status-inactive"}
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-amber focus-visible:ring-offset-2 focus-visible:ring-offset-bg-deep
+                  `}
                 >
-                  <Download size={14} />
-                  {installing ? "Connecting..." : "Connect"}
+                  <span
+                    className={`
+                      inline-block h-[14px] w-[14px] rounded-full bg-white
+                      transition-transform duration-200 shadow-sm
+                      ${autostart ? "translate-x-[16px]" : "translate-x-[2px]"}
+                    `}
+                  />
+                </button>
+                <UIText variant="body">Launch at login</UIText>
+              </label>
+            </section>
+
+            <UIDivider />
+
+            <section className="flex flex-col gap-[var(--spacing-3)]">
+              <UIText variant="section" as="h3">
+                Port range
+              </UIText>
+              <UIText variant="body" className="text-text-secondary">
+                Changes only affect new projects. Already assigned ranges stay the same.
+              </UIText>
+              <div className="flex items-end gap-[var(--spacing-3)]">
+                <UIInput
+                  label="Base port"
+                  type="number"
+                  value={basePort}
+                  onChange={(e) => setBasePort(e.target.value)}
+                  wrapperClassName="w-32"
+                />
+                <UIInput
+                  label="Range size"
+                  type="number"
+                  value={rangeSize}
+                  onChange={(e) => setRangeSize(e.target.value)}
+                  wrapperClassName="w-32"
+                />
+                <UIButton variant="primary" onClick={handleSaveConfig}>
+                  <Save size={14} aria-hidden="true" />
+                  {configSaved ? "Saved" : "Save"}
                 </UIButton>
-              </>
-            )}
+              </div>
+            </section>
           </div>
+        </UITabPanel>
 
-          <UIText variant="body" className="text-text-secondary">
-            {mcpInstalled
-              ? "Claude Code can now manage your project ports automatically. Restart Claude Code if you just connected."
-              : "Connect to Claude Code to reserve ports and register services automatically."}
-          </UIText>
-
-          {mcpInstalled && (
-            <div className="flex flex-col gap-[var(--spacing-1)] bg-bg-surface rounded-[var(--radius-md)] p-[var(--spacing-3)]">
-              <UIText variant="label">Available tools</UIText>
-              <div className="flex flex-wrap gap-[var(--spacing-1)]">
-                {["list_all", "reserve_range", "register_port", "release_project", "scan_active"].map(
-                  (tool) => (
-                    <UIBadge key={tool} variant="inactive">
-                      <UIText variant="mono" className="text-[10px]!">
-                        {tool}
-                      </UIText>
-                    </UIBadge>
-                  ),
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <UIDivider />
-
-        {/* Other Editors - Manual Config */}
-        <div className="flex flex-col gap-[var(--spacing-2)]">
-          <UIText variant="label">Other editors</UIText>
-
-          <UISelect
-            label="Select editor"
-            options={MCP_CLIENTS.map((c) => ({ value: c.value, label: c.label }))}
-            value={selectedClient}
-            onChange={setSelectedClient}
-          />
-
-          {(() => {
-            const client = MCP_CLIENTS.find((c) => c.value === selectedClient);
-            if (!client) return null;
-            const configCode = generateMcpConfig(client, mcpDir);
-            const configLabel = client.format === "toml" ? "MCP config (TOML)" : "MCP config";
-
-            return (
-              <div className="flex flex-col gap-[var(--spacing-3)]">
-                <CodeBlock code={configCode} label={configLabel} />
-
-                <UIText variant="body" className="text-text-secondary">
-                  Paste the config into <UIText variant="mono" className="text-[11px]!">{client.configPath}</UIText>
-                </UIText>
-
-                {client.rulesPath && (
-                  <CodeBlock code={generateRulesContent(client)} label={`Instructions for ${client.label}`} />
-                )}
-
-                {client.rulesPath && (
-                  <UIText variant="body" className="text-text-secondary">
-                    Paste the instructions into the file <UIText variant="mono" className="text-[11px]!">{client.rulesPath}</UIText> at the root of your project.
+        <UITabPanel value="integrations" active={tab}>
+          <div className="flex flex-col gap-[var(--spacing-5)]">
+            <section className="flex flex-col gap-[var(--spacing-3)]">
+              <UIText variant="section" as="h3">
+                Claude Code
+              </UIText>
+              <div className="flex items-center gap-[var(--spacing-3)]">
+                {mcpInstalled === null ? (
+                  <UIText variant="body" className="text-text-muted">
+                    Checking...
                   </UIText>
+                ) : mcpInstalled ? (
+                  <>
+                    <UIBadge variant="active">
+                      <CheckCircle size={12} aria-hidden="true" />
+                      Connected
+                    </UIBadge>
+                    <UIButton variant="danger" onClick={handleUninstall}>
+                      <Trash2 size={14} aria-hidden="true" />
+                      Remove
+                    </UIButton>
+                  </>
+                ) : (
+                  <>
+                    <UIBadge variant="inactive">
+                      <XCircle size={12} aria-hidden="true" />
+                      Not connected
+                    </UIBadge>
+                    <UIButton
+                      variant="primary"
+                      onClick={handleInstall}
+                      disabled={installing}
+                    >
+                      <Download size={14} aria-hidden="true" />
+                      {installing ? "Connecting..." : "Connect"}
+                    </UIButton>
+                  </>
                 )}
-
-                <UIText variant="body" className="text-text-muted text-[11px]!">
-                  Portsage must be running to use the MCP tools.
-                </UIText>
               </div>
-            );
-          })()}
-        </div>
-      </div>
 
-      <UIDivider />
+              <UIText variant="body" className="text-text-secondary">
+                {mcpInstalled
+                  ? "Claude Code can now manage your project ports automatically. Restart Claude Code if you just connected."
+                  : "Connect to Claude Code to reserve ports and register services automatically."}
+              </UIText>
 
-      {/* Export/Import Section */}
-      <div className="flex flex-col gap-[var(--spacing-3)]">
-        <UIText variant="section" as="h3">
-          Data
-        </UIText>
+              {mcpInstalled && (
+                <div className="flex flex-col gap-[var(--spacing-1)] bg-bg-surface rounded-[var(--radius-md)] p-[var(--spacing-3)]">
+                  <UIText variant="label">Available tools</UIText>
+                  <div className="flex flex-wrap gap-[var(--spacing-1)]">
+                    {["list_all", "reserve_range", "register_port", "release_project", "scan_active"].map(
+                      (tool) => (
+                        <UIBadge key={tool} variant="inactive">
+                          <UIText variant="mono" className="text-[10px]!">
+                            {tool}
+                          </UIText>
+                        </UIBadge>
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
 
-        <UIText variant="body" className="text-text-secondary">
-          Export or import the database and preferences for backup or migration.
-        </UIText>
+            <UIDivider />
 
-        <div className="flex gap-[var(--spacing-2)]">
-          <UIButton variant="ghost" onClick={handleExport}>
-            <Download size={14} />
-            Export
-          </UIButton>
-          <UIButton variant="ghost" onClick={handleImport}>
-            <Upload size={14} />
-            Import
-          </UIButton>
-        </div>
+            <section className="flex flex-col gap-[var(--spacing-2)]">
+              <button
+                type="button"
+                onClick={() => setOtherEditorsOpen(!otherEditorsOpen)}
+                aria-expanded={otherEditorsOpen}
+                className="
+                  flex items-center justify-between
+                  text-left cursor-pointer
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-amber rounded-[var(--radius-sm)]
+                "
+              >
+                <UIText variant="section" as="h3">
+                  Other editors
+                </UIText>
+                <ChevronRight
+                  size={16}
+                  aria-hidden="true"
+                  className={`
+                    text-text-secondary transition-transform duration-150
+                    ${otherEditorsOpen ? "rotate-90" : ""}
+                  `}
+                />
+              </button>
+
+              {!otherEditorsOpen && (
+                <UIText variant="body" className="text-text-secondary">
+                  Manual config for Cursor, VS Code, Codex, Windsurf, Cline.
+                </UIText>
+              )}
+
+              {otherEditorsOpen && (
+                <div className="flex flex-col gap-[var(--spacing-3)] pt-[var(--spacing-2)]">
+                  <UISelect
+                    label="Select editor"
+                    options={MCP_CLIENTS.map((c) => ({ value: c.value, label: c.label }))}
+                    value={selectedClient}
+                    onChange={setSelectedClient}
+                  />
+
+                  {otherClient && (() => {
+                    const configCode = generateMcpConfig(otherClient, mcpDir);
+                    const configLabel = otherClient.format === "toml" ? "MCP config (TOML)" : "MCP config";
+
+                    return (
+                      <div className="flex flex-col gap-[var(--spacing-3)]">
+                        <CodeBlock code={configCode} label={configLabel} />
+
+                        <UIText variant="body" className="text-text-secondary">
+                          Paste the config into <UIText variant="mono" className="text-[11px]!">{otherClient.configPath}</UIText>
+                        </UIText>
+
+                        {otherClient.rulesPath && (
+                          <CodeBlock code={generateRulesContent(otherClient)} label={`Instructions for ${otherClient.label}`} />
+                        )}
+
+                        {otherClient.rulesPath && (
+                          <UIText variant="body" className="text-text-secondary">
+                            Paste the instructions into <UIText variant="mono" className="text-[11px]!">{otherClient.rulesPath}</UIText> at the root of your project.
+                          </UIText>
+                        )}
+
+                        <UIText variant="body" className="text-text-muted text-[11px]!">
+                          Portsage must be running to use the MCP tools.
+                        </UIText>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </section>
+          </div>
+        </UITabPanel>
+
+        <UITabPanel value="data" active={tab}>
+          <div className="flex flex-col gap-[var(--spacing-3)]">
+            <UIText variant="section" as="h3">
+              Backup &amp; restore
+            </UIText>
+            <UIText variant="body" className="text-text-secondary">
+              Export or import the database and preferences for backup or migration.
+              Importing replaces the current data.
+            </UIText>
+            <div className="flex gap-[var(--spacing-2)]">
+              <UIButton variant="ghost" onClick={handleExport}>
+                <Download size={14} aria-hidden="true" />
+                Export
+              </UIButton>
+              <UIButton variant="ghost" onClick={handleImport}>
+                <Upload size={14} aria-hidden="true" />
+                Import
+              </UIButton>
+            </div>
+          </div>
+        </UITabPanel>
       </div>
 
       {version && (
-        <div className="flex justify-end pt-[var(--spacing-2)]">
+        <div className="flex justify-end px-[var(--spacing-5)] py-[var(--spacing-2)] border-t border-border-subtle">
           <UIText variant="mono" className="text-[10px]! text-text-muted">
             v{version}
           </UIText>

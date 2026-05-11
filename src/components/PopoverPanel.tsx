@@ -1,3 +1,4 @@
+import { Power } from "lucide-react";
 import { UIText } from "@/components/ui/UIText";
 import { UIBadge } from "@/components/ui/UIBadge";
 import { UIStatus } from "@/components/ui/UIStatus";
@@ -26,7 +27,7 @@ export function PopoverPanel() {
   return (
     <div className="flex flex-col h-screen bg-bg-surface rounded-[var(--radius-lg)] overflow-hidden">
       <header
-        className="flex items-center justify-between px-[var(--spacing-4)] h-10 shrink-0"
+        className="flex items-center justify-between gap-[var(--spacing-2)] px-[var(--spacing-4)] h-10 shrink-0"
         data-tauri-drag-region
       >
         <UIText
@@ -36,11 +37,25 @@ export function PopoverPanel() {
         >
           portsage
         </UIText>
-        {totalPorts > 0 && (
-          <UIBadge variant={totalActive > 0 ? "active" : "inactive"}>
-            {totalActive} active
-          </UIBadge>
-        )}
+        <div className="flex items-center gap-[var(--spacing-2)]">
+          {totalPorts > 0 && (
+            <UIBadge variant={totalActive > 0 ? "active" : "inactive"}>
+              {totalActive} active
+            </UIBadge>
+          )}
+          {/* Quit lives in the header as a low-key icon - it's a rare action
+              vs. the primary "Open portsage" CTA in the footer. Power icon
+              reads as "shut down the app". */}
+          <UIButton
+            variant="ghost"
+            size="icon-sm"
+            onClick={quit}
+            title="Quit portsage"
+            aria-label="Quit portsage"
+          >
+            <Power size={14} aria-hidden="true" />
+          </UIButton>
+        </div>
       </header>
 
       <UIDivider />
@@ -69,7 +84,10 @@ export function PopoverPanel() {
                       className="flex items-center gap-[var(--spacing-2)] pl-[var(--spacing-2)]"
                     >
                       <UIStatus active={port.active} />
-                      <UIText variant="body" className="flex-1 text-[12px]!">
+                      <UIText
+                        variant="body"
+                        className={`flex-1 text-[12px]! ${port.active ? "" : "text-text-secondary!"}`}
+                      >
                         {port.service}
                       </UIText>
                       <UIPortLink port={port.port} className="text-[11px]!" />
@@ -90,11 +108,8 @@ export function PopoverPanel() {
       <UIDivider />
 
       <footer className="flex items-center justify-between px-[var(--spacing-4)] h-10 shrink-0">
-        <UIButton variant="ghost" className="text-[12px]!" onClick={quit}>
-          Quit
-        </UIButton>
-        <UIText variant="label">
-          {totalActive}/{totalPorts} active ports
+        <UIText variant="label" className="tabular-nums">
+          {totalActive}/{totalPorts} active
         </UIText>
         <UIButton variant="ghost" className="text-[12px]!" onClick={openMain}>
           Open portsage

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-11
+
+### Added
+- `WelcomePanel`: replaces the bare "Select a project from the sidebar" empty state. First-run shows a tagline, a hero CTA "Create your first project", and a "Next steps" checklist with a deep-link to Settings -> Integrations. With projects already present, shows Projects/Registered ports/Active stat cards plus quick buttons to create, review unmanaged ports, or open settings
+- `UITabs` / `UITabPanel` primitive in `src/components/ui/`: mono-styled tabs with amber active underline, optional count badge, full `role="tablist"` / `role="tab"` / `role="tabpanel"` aria wiring
+- `Settings` panel split into three tabs - **General** (autostart + port range), **Integrations** (Claude Code MCP + Other editors), **Data** (export/import). "Other editors" config moved into an accordion (closed by default) to stop the panel from scrolling so much at first open. The current tab is deep-linkable via a controlled `tab` prop, so other panels can jump straight to the right section
+- `warning` variant on `UIButton` (amber): for actions that are destructive against the *target* (kill a process) but not against portsage data. Sits between `ghost` and `danger`
+
+### Changed
+- Sidebar: projects with active ports now display an amber status dot to the left of the name and the name in `text-primary`; inactive projects keep `text-secondary` with no dot. The amber badge with the active count stays. Scanning "what is running right now" is now immediate. Empty search shows "No matches" instead of a silent empty list
+- `PortRow`: when a port is inactive the service name and port number are dimmed to `text-muted`, so registered-but-not-running rows visually recede
+- `PortRow`, `ProjectDetail`, `UnmanagedPortsPanel`: kill-process button switched from neutral `ghost` to the new `warning` (amber) variant. The Power icon is kept; the color change makes it clear it's a real action and not just decoration
+- `ProjectDetail` toolbar split into two groups separated by a vertical divider: navigation actions (Open in Finder / Open in Terminal) on the left, destructive actions (kill all / delete project) on the right
+- `PopoverPanel` footer cleaned up: Quit moved to a low-key icon button in the header (it was sitting at the same visual weight as the primary "Open portsage" CTA). The footer now shows only the active/total count and the open button. Inactive services in the popover list also dimmed to `text-secondary`
+- `UIPortLink`: focus-visible now adds an amber ring (previously only a color change), and `aria-label` is set explicitly so screen readers announce "Open http://localhost:PORT in browser"
+- All icon-only buttons across the app gained explicit `aria-label` (folder, terminal, kill, delete, quit, port-link), and their inner Lucide icons are marked `aria-hidden="true"`
+
 ## [0.9.1] - 2026-05-11
 
 ### Fixed
