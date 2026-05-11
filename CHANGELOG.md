@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-11
+
 ### Changed
 - Icon-only buttons are square (28x28 in toolbars, 24x24 in port rows): added `size="icon"` and `size="icon-sm"` to `UIButton`
 - Port row layout reworked: PID is now a column of its own (no more inline middle-dot separator)
