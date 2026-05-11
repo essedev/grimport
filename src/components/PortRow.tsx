@@ -13,7 +13,7 @@ interface PortRowProps {
 
 export function PortRow({ port, onRemove, onKill }: PortRowProps) {
   return (
-    <div className="flex items-center gap-[var(--spacing-2)] h-8 group">
+    <div className="flex items-center gap-[var(--spacing-2)] h-8 px-[var(--spacing-1)] rounded-[var(--radius-sm)] group hover:bg-bg-elevated transition-colors duration-150">
       <div className="w-5 flex justify-center shrink-0">
         <UIStatus active={port.active} />
       </div>
@@ -35,13 +35,12 @@ export function PortRow({ port, onRemove, onKill }: PortRowProps) {
       {/* Action slots reserve their width even when empty, so rows with and
           without active ports stay vertically aligned. */}
       <div className="w-6 flex justify-center shrink-0">
-        {onKill && (
+        {onKill && port.active && (
           <UIButton
-            variant="ghost"
+            variant="danger"
             size="icon-sm"
-            disabled={!port.active}
-            className={`opacity-0 group-hover:opacity-100 text-accent-danger hover:bg-accent-danger-soft hover:text-accent-danger ${port.active ? "" : "group-hover:opacity-30"}`}
-            title={port.active ? "Stop process on this port" : "Port is not active"}
+            className="opacity-0 group-hover:opacity-100"
+            title="Stop process on this port"
             onClick={() => onKill(port)}
           >
             <Power size={14} />

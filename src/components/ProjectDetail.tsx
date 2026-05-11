@@ -228,8 +228,10 @@ export function ProjectDetail({
         </p>
       ) : (
         <div className="flex flex-col">
-          {/* Column header - widths must match PortRow exactly. */}
-          <div className="flex items-center gap-[var(--spacing-2)] h-7 pb-[var(--spacing-2)] mb-[var(--spacing-1)] border-b border-border-subtle">
+          {/* Column header - widths must match PortRow exactly (same padding,
+              same gap, same per-column widths) so the labels align over their
+              respective columns. */}
+          <div className="flex items-center gap-[var(--spacing-2)] h-7 px-[var(--spacing-1)] pb-[var(--spacing-2)] mb-[var(--spacing-1)] border-b border-border-subtle">
             <div className="w-5 shrink-0" />
             <UIText variant="label" className="flex-1 min-w-0">Service</UIText>
             <UIText variant="label" className="w-32">Process</UIText>

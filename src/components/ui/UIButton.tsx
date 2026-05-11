@@ -9,13 +9,17 @@ interface UIButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
 }
 
+// Hover backgrounds use translucent overlays (white/10, danger/20) instead of
+// solid tokens so the contrast is visible regardless of whether the underlying
+// row is on bg-deep, bg-surface, or bg-elevated. A solid bg-elevated hover
+// disappears when the row itself already paints bg-elevated on hover.
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
     "bg-accent-amber text-bg-deep hover:bg-accent-amber/90 border-transparent",
   ghost:
-    "bg-transparent text-text-secondary hover:text-text-primary hover:bg-bg-elevated border-transparent",
+    "bg-transparent text-text-secondary hover:text-text-primary hover:bg-white/10 border-transparent",
   danger:
-    "bg-transparent text-accent-danger hover:bg-accent-danger-soft border-transparent",
+    "bg-transparent text-accent-danger hover:bg-accent-danger/20 hover:text-accent-danger border-transparent",
 };
 
 // Square icon-only sizes keep toolbars visually grid-aligned. The 28px size

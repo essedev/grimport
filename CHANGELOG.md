@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-11
+
+### Fixed
+- Button hover is now clearly visible: ghost hover uses `white/10`, danger hover uses `accent-danger/20` - both work on any background (bg-deep, bg-surface, bg-elevated)
+- Port rows now have a visible hover state (`bg-elevated`) so it's obvious which row is targeted and that hover-reveal actions appeared
+- Kill button no longer renders on inactive ports (previously it was visible at `disabled` opacity even before hover) - the action slot stays present so row alignment is preserved
+
 ## [0.8.1] - 2026-05-11
 
 ### Changed
