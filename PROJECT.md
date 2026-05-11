@@ -167,6 +167,7 @@ Compact panel (350x480px), read-only, for fast checks.
 
 - Header with the "portsage" title and an active-ports badge
 - List of projects with ports and active state (amber/grey dot)
+- Click on any port number opens `http://localhost:PORT` in the default browser
 - Footer with port count and "Open portsage" link
 
 ### Full app window
@@ -187,12 +188,16 @@ Resizable window (min 700x400) with transparent titlebar.
 
 **Project detail** (main pane)
 - Name, path, assigned range, active-ports badge
-- Service list: service name, port, active state, process name
+- Service list: service name, port, active state, process name with PID
+- Click on any port number opens `http://localhost:PORT` in the default browser
+- Per-port Power button: confirms and sends SIGTERM, escalates to SIGKILL after 2s
 - Service add form with a dropdown of free ports in the range
-- Actions: remove project, open in Finder, open in Terminal
+- Actions: remove project, open in Finder, open in Terminal, Stop all active ports (Power button - SIGTERM/SIGKILL on every active port of the project, parallel)
 
 **Unmanaged ports**
 - Table with port, process name, PID
+- Click on any port number opens `http://localhost:PORT` in the default browser
+- Per-row Power button: confirms and sends SIGTERM, escalates to SIGKILL after 2s
 - Only ports >= 3000, system processes filtered out
 
 **Settings**

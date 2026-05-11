@@ -114,6 +114,7 @@ Pannello compatto (350x480px), solo lettura, per check veloce.
 
 - Header con titolo "portsage" e badge porte attive
 - Lista progetti con porte e stato attivo (pallino ambra/grigio)
+- Click sul numero di porta apre `http://localhost:PORTA` nel browser predefinito
 - Footer con conteggio porte e link "Apri portsage"
 
 ### Finestra app full
@@ -134,12 +135,16 @@ Finestra ridimensionabile (min 700x400) con titlebar trasparente.
 
 **Dettaglio progetto** (pannello principale)
 - Nome, path, range assegnato, badge porte attive
-- Lista servizi: nome servizio, porta, stato attivo, nome processo
+- Lista servizi: nome servizio, porta, stato attivo, nome processo con PID
+- Click sul numero di porta apre `http://localhost:PORTA` nel browser predefinito
+- Bottone Power per singola porta: chiede conferma e invia SIGTERM, escalation a SIGKILL dopo 2s
 - Aggiunta servizi con dropdown porte libere nel range
-- Azioni: rimuovi progetto, apri nel Finder, apri nel Terminale
+- Azioni: rimuovi progetto, apri nel Finder, apri nel Terminale, Stop di tutte le porte attive (bottone Power - SIGTERM/SIGKILL su ogni porta attiva del progetto, in parallelo)
 
 **Porte non gestite**
 - Tabella con porta, nome processo, PID
+- Click sul numero di porta apre `http://localhost:PORTA` nel browser predefinito
+- Bottone Power per riga: chiede conferma e invia SIGTERM, escalation a SIGKILL dopo 2s
 - Solo porte >= 3000, filtrate da processi di sistema
 
 **Impostazioni**

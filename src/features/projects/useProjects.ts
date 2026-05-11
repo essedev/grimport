@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import type { ProjectStatus, UnmanagedPort } from "@/lib/types";
+import type { ProjectStatus, UnmanagedPort, KillOutcome } from "@/lib/types";
 import * as cmd from "@/lib/commands";
 import { humanizeError } from "@/lib/errors";
 import { useToast } from "@/lib/toast";
@@ -57,6 +57,33 @@ export function useProjects() {
 
   const removePort = (id: number) => run(() => cmd.removePort(id));
 
+  // Kill helpers don't go through `run`: callers need the KillOutcome to
+  // decide whether to surface "permission denied" or "process already gone"
+  // hints. Technical failures (channel errors) still produce an error toast.
+  const killPort = async (port: number): Promise<KillOutcome | null> => {
+    try {
+      const outcome = await cmd.killPort(port);
+      await refresh();
+      return outcome;
+    } catch (err) {
+      showError(humanizeError(err));
+      return null;
+    }
+  };
+
+  const killProject = async (
+    projectId: number,
+  ): Promise<Array<[number, KillOutcome]> | null> => {
+    try {
+      const result = await cmd.killProject(projectId);
+      await refresh();
+      return result;
+    } catch (err) {
+      showError(humanizeError(err));
+      return null;
+    }
+  };
+
   return {
     projects,
     unmanagedPorts,
@@ -66,5 +93,7 @@ export function useProjects() {
     remove,
     addPort,
     removePort,
+    killPort,
+    killProject,
   };
 }

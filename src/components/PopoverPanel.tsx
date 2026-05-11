@@ -3,6 +3,7 @@ import { UIBadge } from "@/components/ui/UIBadge";
 import { UIStatus } from "@/components/ui/UIStatus";
 import { UIDivider } from "@/components/ui/UIDivider";
 import { UIButton } from "@/components/ui/UIButton";
+import { UIPortLink } from "@/components/ui/UIPortLink";
 import { useProjects } from "@/features/projects/useProjects";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -71,9 +72,7 @@ export function PopoverPanel() {
                       <UIText variant="body" className="flex-1 text-[12px]!">
                         {port.service}
                       </UIText>
-                      <UIText variant="mono" className="text-[11px]! tabular-nums">
-                        {port.port}
-                      </UIText>
+                      <UIPortLink port={port.port} className="text-[11px]!" />
                     </div>
                   ))}
                   {project.ports.length === 0 && (

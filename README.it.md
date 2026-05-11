@@ -57,8 +57,7 @@ Il MCP server espone 5 tool:
 
 Prossime feature pianificate (vedi `FEATURES_TODO.md` per dettagli):
 
-- Kill del processo direttamente dalla UI
-- Open in browser / copy URL per porte HTTP
+- Copy URL per porte HTTP
 - CLI per scripting (`portsage reserve`, `portsage list`, ecc.)
 - Tag e colori personalizzabili per progetti
 - Notifiche di sistema (collisioni, porte zombie, eventi MCP)

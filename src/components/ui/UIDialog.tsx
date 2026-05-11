@@ -101,7 +101,10 @@ export function UIDialog({
         </h2>
 
         <div id="ui-dialog-message">
-          <UIText variant="body" className="text-text-secondary leading-relaxed">
+          <UIText
+            variant="body"
+            className="text-text-secondary leading-relaxed whitespace-pre-line"
+          >
             {message}
           </UIText>
         </div>

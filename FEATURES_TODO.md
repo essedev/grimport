@@ -4,58 +4,24 @@ Features planned to reach parity with existing competitors (Portkeeper, Port Man
 
 ---
 
-## 1. Kill process from the UI
+## 1. Kill process from the UI - DONE
 
-**Priority**: high. It is the basic workflow in existing port managers. Its absence is the first thing users notice.
+Shipped: per-port Power button on PortRow and on unmanaged port rows, per-project Power button in the project detail header. Sends `kill -TERM <pid>`, waits 2s, escalates to `kill -KILL <pid>` if the process is still alive. Confirmation modal lists the targeted processes and PIDs; toasts surface the outcome (`terminated`, `killed`, `not_active`, `permission_denied`). PID is fetched from a fresh `lsof` scan at kill time to avoid stale data, and a refresh runs immediately after.
 
-### What it does
-Lets you terminate a process occupying a port directly from the UI, without dropping into the terminal.
+Tauri commands: `kill_port(port: i64) -> KillOutcome` and `kill_project(project_id: i64) -> [(port, outcome)]`, both async. Project-level kills run concurrently via `tokio::spawn`.
 
-### UX
-- In the project detail service list: a "kill" button next to the active port
-- In the "Unmanaged ports" table: a "kill" button next to the port
-- Confirmation before killing (modal or "click again to confirm" tooltip)
-- Visual feedback: port goes from active (amber) to inactive (grey) after kill
-
-### Implementation
-- Tauri command `kill_port(port: u16)` in the Rust backend
-- Runs `kill -TERM <pid>` (graceful) and falls back to `kill -9 <pid>`
-- The PID is already available from the port scanner (`lsof -iTCP -sTCP:LISTEN -nP`)
-- Automatic refresh of the port scanner after kill
-
-### MCP
-- Add a `kill_port(port: int)` tool to the MCP server
-- Claude can kill a zombie process on request
-
-### Edge cases
-- System (root) process: clear error, suggest sudo
-- Already-dead process: silent refresh
-- Port not found: explicit error
+Not shipped (still open):
+- MCP tool `kill_port(port: int)` so Claude can kill zombies on request
+- A global "kill all" was considered and explicitly skipped: ambiguous scope, high blast radius
 
 ---
 
-## 2. Open in browser / Copy URL
+## 2. Open in browser / Copy URL - PARTIALLY DONE
 
-**Priority**: medium. Low effort, high perceived value.
+Shipped: click on any port number opens `http://localhost:PORT` in the default browser. Available in main window project detail, popover, and unmanaged ports panel. Backed by `open_in_browser(port: i64)` (runs macOS `open <url>`) and a `UIPortLink` primitive. No HTTP heuristic - we let the browser report "connection refused" if the port isn't actually HTTP, which is clearer than a heuristic blacklist.
 
-### What it does
-For HTTP ports (Vite, FastAPI, etc.), a click opens `http://localhost:PORT` in the default browser. Alternatively, copies the URL to the clipboard.
-
-### UX
-- Click on the port number: opens in the browser
-- Cmd+click or right-click: copies the URL to the clipboard with a "Copied" toast
-- Discreet icon next to HTTP-friendly ports indicating the available action
-
-### Which ports are "HTTP"?
-- Simple heuristic: any port registered with a known service (vite, fastapi, next, react, etc.)
-- Service name in the registry: if it contains "vite|frontend|api|backend|web", treat as HTTP
-- Settings: editable whitelist/blacklist of service names
-- Fallback: an "open as HTTP" button always available
-
-### Implementation
-- Tauri command `open_in_browser(url: String)` using the `open` crate or `tauri-plugin-shell`
-- Command `copy_to_clipboard(text: String)` using `tauri-plugin-clipboard-manager`
-- UI: hover on port numbers shows available actions
+Not shipped:
+- Copy URL to clipboard (Cmd+click / right-click)
 
 ---
 
@@ -204,8 +170,8 @@ Replaces hardcoded UI strings with translation keys, adds a language switcher in
 
 ## Suggested implementation order
 
-1. **Kill process** - unblocks the basic workflow, parity with competitors
-2. **Open in browser** - low effort, high value
+1. ~~**Kill process** - unblocks the basic workflow, parity with competitors~~ (done)
+2. ~~**Open in browser** - low effort, high value~~ (done)
 3. **CLI** - opens new use cases (scripting, CI)
 4. **i18n and language switcher** - reaches Italian-speaking users and any future locale
 5. **Notifications** - added value, differentiator

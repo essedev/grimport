@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Trash2, FolderOpen, Terminal, Plus } from "lucide-react";
+import { Trash2, FolderOpen, Terminal, Plus, Power } from "lucide-react";
 import { useConfirm } from "@/lib/dialog";
+import { useToast } from "@/lib/toast";
 import { UIText } from "@/components/ui/UIText";
 import { UIButton } from "@/components/ui/UIButton";
 import { UIDivider } from "@/components/ui/UIDivider";
@@ -8,13 +9,17 @@ import { UIBadge } from "@/components/ui/UIBadge";
 import { PortRow } from "@/components/PortRow";
 import { AddPortForm } from "@/components/AddPortForm";
 import * as cmd from "@/lib/commands";
-import type { ProjectStatus } from "@/lib/types";
+import type { ProjectStatus, PortStatus, KillOutcome } from "@/lib/types";
 
 interface ProjectDetailProps {
   project: ProjectStatus;
   onDelete: (id: number) => void;
   onAddPort: (projectId: number, service: string, port: number) => void;
   onRemovePort: (id: number) => void;
+  onKillPort: (port: number) => Promise<KillOutcome | null>;
+  onKillProject: (
+    projectId: number,
+  ) => Promise<Array<[number, KillOutcome]> | null>;
 }
 
 export function ProjectDetail({
@@ -22,9 +27,12 @@ export function ProjectDetail({
   onDelete,
   onAddPort,
   onRemovePort,
+  onKillPort,
+  onKillProject,
 }: ProjectDetailProps) {
   const [showAddPort, setShowAddPort] = useState(false);
   const confirm = useConfirm();
+  const { showError, showSuccess } = useToast();
   const activePorts = project.ports.filter((p) => p.active).length;
 
   const handleDelete = async () => {
@@ -41,6 +49,83 @@ export function ProjectDetail({
       cancelLabel: "Cancel",
     });
     if (ok) onDelete(project.id);
+  };
+
+  const handleKillSingle = async (target: PortStatus) => {
+    const procLine =
+      target.process !== null && target.pid !== null
+        ? `${target.service} (${target.process}, PID ${target.pid})`
+        : `${target.service} on port ${target.port}`;
+    const ok = await confirm({
+      title: `Stop port ${target.port}?`,
+      message: `${procLine}\n\nSIGTERM will be sent. If the process does not exit within 2s, SIGKILL is sent.`,
+      kind: "warning",
+      okLabel: "Stop",
+      cancelLabel: "Cancel",
+    });
+    if (!ok) return;
+    const outcome = await onKillPort(target.port);
+    if (outcome) reportSingleOutcome(target.port, outcome);
+  };
+
+  const handleKillAll = async () => {
+    const activeList = project.ports.filter((p) => p.active);
+    if (activeList.length === 0) return;
+    const lines = activeList
+      .map((p) => {
+        const proc =
+          p.process !== null && p.pid !== null
+            ? `${p.process}, PID ${p.pid}`
+            : "unknown process";
+        return `  ${p.port}  ${p.service.padEnd(12)} (${proc})`;
+      })
+      .join("\n");
+    const ok = await confirm({
+      title: `Stop ${activeList.length} active port${activeList.length === 1 ? "" : "s"} in "${project.name}"?`,
+      message: `${lines}\n\nSIGTERM to each, escalating to SIGKILL after 2s if needed.`,
+      kind: "warning",
+      okLabel: "Stop",
+      cancelLabel: "Cancel",
+    });
+    if (!ok) return;
+    const results = await onKillProject(project.id);
+    if (results) reportProjectOutcomes(results);
+  };
+
+  const reportSingleOutcome = (port: number, outcome: KillOutcome) => {
+    switch (outcome) {
+      case "terminated":
+        showSuccess(`Port ${port} stopped`);
+        break;
+      case "killed":
+        showSuccess(`Port ${port} force-killed (SIGKILL)`);
+        break;
+      case "not_active":
+        showSuccess(`Port ${port} was already free`);
+        break;
+      case "permission_denied":
+        showError(`Cannot stop port ${port}: permission denied (different user?)`);
+        break;
+    }
+  };
+
+  const reportProjectOutcomes = (results: Array<[number, KillOutcome]>) => {
+    if (results.length === 0) {
+      showSuccess("No active ports to stop");
+      return;
+    }
+    const denied = results.filter(([, o]) => o === "permission_denied");
+    if (denied.length > 0) {
+      const ports = denied.map(([p]) => p).join(", ");
+      showError(`Permission denied for port${denied.length === 1 ? "" : "s"} ${ports}`);
+      return;
+    }
+    const killed = results.filter(([, o]) => o === "killed").length;
+    const terminated = results.filter(([, o]) => o === "terminated").length;
+    const parts: string[] = [];
+    if (terminated > 0) parts.push(`${terminated} stopped`);
+    if (killed > 0) parts.push(`${killed} force-killed`);
+    showSuccess(parts.length > 0 ? parts.join(", ") : "Done");
   };
 
   return (
@@ -75,6 +160,19 @@ export function ProjectDetail({
               </UIButton>
             </>
           )}
+          <UIButton
+            variant="ghost"
+            onClick={handleKillAll}
+            disabled={activePorts === 0}
+            title={
+              activePorts === 0
+                ? "No active ports to stop"
+                : `Stop all ${activePorts} active port${activePorts === 1 ? "" : "s"}`
+            }
+            className="text-accent-danger hover:bg-accent-danger-soft hover:text-accent-danger"
+          >
+            <Power size={16} />
+          </UIButton>
           <UIButton
             variant="danger"
             onClick={handleDelete}
@@ -127,7 +225,12 @@ export function ProjectDetail({
       ) : (
         <div className="flex flex-col gap-[var(--spacing-1)]">
           {project.ports.map((port) => (
-            <PortRow key={port.id} port={port} onRemove={onRemovePort} />
+            <PortRow
+              key={port.id}
+              port={port}
+              onRemove={onRemovePort}
+              onKill={handleKillSingle}
+            />
           ))}
         </div>
       )}

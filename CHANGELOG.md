@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-11
+
+### Added
+- Click on any port number to open `http://localhost:PORT` in the default browser, available in the main window project detail, the menubar popover, and the unmanaged ports panel. Backed by a new `open_in_browser` Tauri command and a `UIPortLink` primitive
+- Stop process by port: Power icon in PortRow (per port) and in the project detail header (per project), and on each unmanaged port row. Sends SIGTERM, waits 2s, escalates to SIGKILL if the process is still alive. Confirmation dialog lists processes and PIDs; toasts report the outcome (`terminated`, `killed`, `not_active`, `permission_denied`). Backed by new `kill_port` and `kill_project` async Tauri commands. PID is now part of `PortStatus` so the UI can display it alongside the process name
+
 ## [0.7.2] - 2026-04-07
 
 ### Fixed
@@ -40,8 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed `Path::parent().unwrap()` in `commands::install_mcp`
 
 ### Planned
-- Kill process from the UI
-- Open in browser / copy URL for HTTP ports
+- Copy URL for HTTP ports
 - CLI for scripting
 - i18n and language switcher (English + Italian)
 - Project tags and colors

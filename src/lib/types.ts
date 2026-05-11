@@ -5,8 +5,15 @@ export interface PortStatus {
   port: number;
   active: boolean;
   process: string | null;
+  pid: number | null;
   created_at: string;
 }
+
+export type KillOutcome =
+  | "terminated"
+  | "killed"
+  | "not_active"
+  | "permission_denied";
 
 export interface UnmanagedPort {
   port: number;

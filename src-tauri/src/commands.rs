@@ -35,6 +35,7 @@ pub struct PortStatus {
     pub port: i64,
     pub active: bool,
     pub process: Option<String>,
+    pub pid: Option<i64>,
     pub created_at: String,
 }
 
@@ -76,6 +77,7 @@ fn enrich_with_status(
                     PortStatus {
                         active: ap.is_some(),
                         process: ap.map(|a| a.process.clone()),
+                        pid: ap.map(|a| a.pid),
                         id: p.id,
                         project_id: p.project_id,
                         service: p.service,
@@ -134,6 +136,7 @@ pub fn add_port(
     Ok(PortStatus {
         active: active.contains(&p.port),
         process: None,
+        pid: None,
         id: p.id,
         project_id: p.project_id,
         service: p.service,
@@ -187,6 +190,139 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn open_in_browser(port: i64) -> Result<(), String> {
+    if !(1..=65535).contains(&port) {
+        return Err(format!("invalid port: {port}"));
+    }
+    let url = format!("http://localhost:{port}");
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum KillOutcome {
+    /// Process exited after SIGTERM within the grace period.
+    Terminated,
+    /// Process survived SIGTERM and was force-killed with SIGKILL.
+    Killed,
+    /// No process found listening on the port at kill time.
+    NotActive,
+    /// kill(2) returned EPERM - the process belongs to another user.
+    PermissionDenied,
+}
+
+/// 2 seconds is the empirical sweet spot: enough for Postgres-class daemons
+/// to flush and exit cleanly, short enough that the UI doesn't feel stuck.
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn is_permission_error(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("operation not permitted") || s.contains("not permitted")
+}
+
+/// Send SIGTERM, wait for the grace period, escalate to SIGKILL if needed.
+/// Errors from `kill` are mapped to KillOutcome rather than bubbled - the
+/// frontend only cares about the final state of the port, not which syscall
+/// returned what.
+async fn kill_pid_with_escalation(pid: i64) -> KillOutcome {
+    let term = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .output();
+    match term {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if is_permission_error(&stderr) {
+                return KillOutcome::PermissionDenied;
+            }
+            // "No such process" - already gone between scan and SIGTERM.
+            return KillOutcome::NotActive;
+        }
+        Err(_) => return KillOutcome::PermissionDenied,
+    }
+
+    tokio::time::sleep(KILL_GRACE).await;
+
+    // kill -0 probes existence without delivering a signal.
+    let probe = std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output();
+    let still_alive = matches!(probe, Ok(o) if o.status.success());
+    if !still_alive {
+        return KillOutcome::Terminated;
+    }
+
+    let force = std::process::Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .output();
+    match force {
+        Ok(o) if o.status.success() => KillOutcome::Killed,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if is_permission_error(&stderr) {
+                KillOutcome::PermissionDenied
+            } else {
+                // Died between probe and SIGKILL - count as terminated.
+                KillOutcome::Terminated
+            }
+        }
+        Err(_) => KillOutcome::PermissionDenied,
+    }
+}
+
+#[tauri::command]
+pub async fn kill_port(port: i64) -> Result<KillOutcome, String> {
+    // Fresh scan: the PID cached on the frontend can be obsolete by seconds.
+    let active = scanner::scan_active_ports_detailed();
+    let Some(target) = active.into_iter().find(|p| p.port == port) else {
+        return Ok(KillOutcome::NotActive);
+    };
+    Ok(kill_pid_with_escalation(target.pid).await)
+}
+
+#[tauri::command]
+pub async fn kill_project(
+    db: State<'_, Arc<Database>>,
+    project_id: i64,
+) -> Result<Vec<(i64, KillOutcome)>, String> {
+    let projects = db.list_projects().map_err(|e| e.to_string())?;
+    let registered: HashSet<i64> = projects
+        .iter()
+        .find(|p| p.project.id == project_id)
+        .ok_or_else(|| format!("project {project_id} not found"))?
+        .ports
+        .iter()
+        .map(|p| p.port)
+        .collect();
+
+    let active: Vec<ActivePort> = scanner::scan_active_ports_detailed()
+        .into_iter()
+        .filter(|ap| registered.contains(&ap.port))
+        .collect();
+
+    // Kills run concurrently: with N active ports a sequential loop would
+    // take N * KILL_GRACE seconds (e.g. 5 ports = 10s of UI spinner). The
+    // grace period is the dominant cost, so parallelism is essentially free.
+    let handles: Vec<_> = active
+        .into_iter()
+        .map(|ap| tokio::spawn(async move { (ap.port, kill_pid_with_escalation(ap.pid).await) }))
+        .collect();
+
+    let mut results = Vec::with_capacity(handles.len());
+    for h in handles {
+        if let Ok(r) = h.await {
+            results.push(r);
+        }
+    }
+    results.sort_by_key(|(port, _)| *port);
+    Ok(results)
 }
 
 #[tauri::command]
@@ -514,10 +650,13 @@ mod tests {
         let vite = p.ports.iter().find(|p| p.service == "vite").unwrap();
         assert!(vite.active);
         assert_eq!(vite.process.as_deref(), Some("node"));
+        // PID must travel alongside process - the UI uses it to confirm kill targets.
+        assert_eq!(vite.pid, Some(999));
 
         let api = p.ports.iter().find(|p| p.service == "api").unwrap();
         assert!(!api.active);
         assert!(api.process.is_none());
+        assert!(api.pid.is_none());
     }
 
     #[test]
@@ -529,6 +668,7 @@ mod tests {
         let result = enrich_with_status(projects, &[]);
         assert!(!result[0].ports[0].active);
         assert!(result[0].ports[0].process.is_none());
+        assert!(result[0].ports[0].pid.is_none());
     }
 
     #[test]
@@ -608,6 +748,24 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         let result = parse_existing_or_empty(&path).unwrap();
         assert_eq!(result, serde_json::json!({}));
+    }
+
+    // --- is_permission_error ---
+
+    #[test]
+    fn is_permission_error_matches_macos_and_linux_phrasing() {
+        // macOS bash: "kill: (12345) - Operation not permitted"
+        assert!(is_permission_error("kill: (12345) - Operation not permitted"));
+        // bsd kill: "kill: 12345: Operation not permitted"
+        assert!(is_permission_error("kill: 12345: Operation not permitted"));
+        // Case-insensitive match defends against shell capitalization drift.
+        assert!(is_permission_error("OPERATION NOT PERMITTED"));
+    }
+
+    #[test]
+    fn is_permission_error_rejects_other_failures() {
+        assert!(!is_permission_error("kill: (12345) - No such process"));
+        assert!(!is_permission_error(""));
     }
 
     #[test]

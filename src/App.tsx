@@ -15,8 +15,17 @@ import type { ProjectStatus } from "@/lib/types";
 type View = "project" | "unmanaged" | "settings";
 
 function MainWindow() {
-  const { projects, unmanagedPorts, loading, create, remove, addPort, removePort } =
-    useProjects();
+  const {
+    projects,
+    unmanagedPorts,
+    loading,
+    create,
+    remove,
+    addPort,
+    removePort,
+    killPort,
+    killProject,
+  } = useProjects();
   const [selected, setSelected] = useState<ProjectStatus | null>(null);
   const [activeView, setActiveView] = useState<View>("project");
 
@@ -64,7 +73,7 @@ function MainWindow() {
           ) : activeView === "settings" ? (
             <SettingsPanel />
           ) : activeView === "unmanaged" ? (
-            <UnmanagedPortsPanel ports={unmanagedPorts} />
+            <UnmanagedPortsPanel ports={unmanagedPorts} onKill={killPort} />
           ) : currentProject ? (
             <ProjectDetail
               project={currentProject}
@@ -74,6 +83,8 @@ function MainWindow() {
               }}
               onAddPort={addPort}
               onRemovePort={removePort}
+              onKillPort={killPort}
+              onKillProject={killProject}
             />
           ) : (
             <div className="flex items-center justify-center h-full">

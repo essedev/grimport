@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectStatus, PortStatus, UnmanagedPort } from "./types";
+import type { ProjectStatus, PortStatus, UnmanagedPort, KillOutcome } from "./types";
 
 export function listProjects(): Promise<ProjectStatus[]> {
   return invoke("list_projects");
@@ -46,6 +46,20 @@ export function openInFinder(path: string): Promise<void> {
 
 export function openInTerminal(path: string): Promise<void> {
   return invoke("open_in_terminal", { path });
+}
+
+export function openInBrowser(port: number): Promise<void> {
+  return invoke("open_in_browser", { port });
+}
+
+export function killPort(port: number): Promise<KillOutcome> {
+  return invoke("kill_port", { port });
+}
+
+export function killProject(
+  projectId: number,
+): Promise<Array<[number, KillOutcome]>> {
+  return invoke("kill_project", { projectId });
 }
 
 export function getConfig(): Promise<{ base_port: string; range_size: string }> {

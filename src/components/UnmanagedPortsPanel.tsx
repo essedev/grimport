@@ -1,13 +1,49 @@
+import { Power } from "lucide-react";
 import { UIText } from "@/components/ui/UIText";
 import { UIDivider } from "@/components/ui/UIDivider";
 import { UIStatus } from "@/components/ui/UIStatus";
-import type { UnmanagedPort } from "@/lib/types";
+import { UIButton } from "@/components/ui/UIButton";
+import { UIPortLink } from "@/components/ui/UIPortLink";
+import { useConfirm } from "@/lib/dialog";
+import { useToast } from "@/lib/toast";
+import type { UnmanagedPort, KillOutcome } from "@/lib/types";
 
 interface UnmanagedPortsPanelProps {
   ports: UnmanagedPort[];
+  onKill: (port: number) => Promise<KillOutcome | null>;
 }
 
-export function UnmanagedPortsPanel({ ports }: UnmanagedPortsPanelProps) {
+export function UnmanagedPortsPanel({ ports, onKill }: UnmanagedPortsPanelProps) {
+  const confirm = useConfirm();
+  const { showError, showSuccess } = useToast();
+
+  const handleKill = async (p: UnmanagedPort) => {
+    const ok = await confirm({
+      title: `Stop port ${p.port}?`,
+      message: `${p.process} (PID ${p.pid})\n\nSIGTERM will be sent. If the process does not exit within 2s, SIGKILL is sent.`,
+      kind: "warning",
+      okLabel: "Stop",
+      cancelLabel: "Cancel",
+    });
+    if (!ok) return;
+    const outcome = await onKill(p.port);
+    if (!outcome) return;
+    switch (outcome) {
+      case "terminated":
+        showSuccess(`Port ${p.port} stopped`);
+        break;
+      case "killed":
+        showSuccess(`Port ${p.port} force-killed (SIGKILL)`);
+        break;
+      case "not_active":
+        showSuccess(`Port ${p.port} was already free`);
+        break;
+      case "permission_denied":
+        showError(`Cannot stop port ${p.port}: permission denied (different user?)`);
+        break;
+    }
+  };
+
   return (
     <div className="flex flex-col gap-[var(--spacing-4)] p-[var(--spacing-5)]">
       <div className="flex flex-col gap-[var(--spacing-1)]">
@@ -36,20 +72,26 @@ export function UnmanagedPortsPanel({ ports }: UnmanagedPortsPanelProps) {
           {ports.map((port) => (
             <div
               key={port.port}
-              className="flex items-center gap-[var(--spacing-2)] h-9 hover:bg-bg-elevated rounded-[var(--radius-sm)] px-[var(--spacing-1)]"
+              className="flex items-center gap-[var(--spacing-2)] h-9 hover:bg-bg-elevated rounded-[var(--radius-sm)] px-[var(--spacing-1)] group"
             >
               <div className="w-5 flex justify-center">
                 <UIStatus active={true} />
               </div>
-              <UIText variant="mono" className="w-20">
-                {port.port}
-              </UIText>
+              <UIPortLink port={port.port} className="w-20 text-left" />
               <UIText variant="body" className="flex-1 truncate">
                 {port.process}
               </UIText>
               <UIText variant="mono" className="w-16 text-right text-text-secondary text-[11px]!">
                 {port.pid}
               </UIText>
+              <UIButton
+                variant="ghost"
+                className="opacity-0 group-hover:opacity-100 p-1 text-accent-danger hover:bg-accent-danger-soft hover:text-accent-danger"
+                title="Stop process on this port"
+                onClick={() => handleKill(port)}
+              >
+                <Power size={14} />
+              </UIButton>
             </div>
           ))}
         </div>

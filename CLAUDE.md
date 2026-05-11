@@ -19,7 +19,7 @@ A macOS menubar app for managing port allocation across projects. See PROJECT.md
 ```
 src/
   components/
-    ui/               # Primitives (UICard, UIButton, UISelect, etc.)
+    ui/               # Primitives (UICard, UIButton, UISelect, UIPortLink, etc.)
     PortRow.tsx
     ProjectCard.tsx
     ProjectDetail.tsx

@@ -135,6 +135,7 @@ Reusable base components, no domain logic.
 | `UISearch` | Input with search icon, used for filters |
 | `UISelect` | Custom dropdown (no native select). Props: `options`, `value`, `onChange`. Animated chevron, list with hover/selected states |
 | `UIDivider` | Horizontal separator line, color border-subtle |
+| `UIPortLink` | Port number rendered as a button. Click opens `http://localhost:PORT` in the default browser. Mono font, amber on hover |
 
 ### Composed (src/components/)
 
