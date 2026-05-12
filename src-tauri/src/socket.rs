@@ -31,13 +31,26 @@ pub fn start_socket_server_at(db: Arc<Database>, path: PathBuf) {
         rt.block_on(async move {
             // Remove stale socket file
             let _ = std::fs::remove_file(&path);
+            // Track whether we created the parent directory ourselves. Two
+            // distinct deployment shapes share this code:
+            //
+            //   - User XDG (`$XDG_RUNTIME_DIR/portsage/portsage.sock`): we
+            //     create the directory if missing and lock it down to
+            //     0700/0600 - this is a per-user-only path; nobody but the
+            //     running user has any business connecting.
+            //   - System-wide systemd (`/run/portsage/portsage.sock`): the
+            //     unit's `RuntimeDirectory=portsage` + `RuntimeDirectoryMode=
+            //     0750` create the dir for us with group `portsage` access
+            //     so members of that group can connect. If we then chmod
+            //     0700 on the dir or 0600 on the socket we'd silently break
+            //     that policy.
+            //
+            // Heuristic: if the parent existed before we touched anything,
+            // an external policy is in charge - leave the dir alone and put
+            // the socket at 0660 so the parent's group access still works.
+            // Otherwise (we created the parent) keep the legacy lockdown.
+            let mut external_parent_policy = false;
             if let Some(parent) = path.parent() {
-                // Track whether we are creating the parent directory so we
-                // only narrow its permissions on the dirs we own. Under
-                // systemd (`RuntimeDirectory=portsage`) the parent already
-                // exists with `RuntimeDirectoryMode=0750` so that the
-                // `portsage` group can connect; chmod 0700 here would
-                // silently break that.
                 let parent_existed_before = parent.exists();
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     eprintln!(
@@ -46,16 +59,12 @@ pub fn start_socket_server_at(db: Arc<Database>, path: PathBuf) {
                     );
                     return;
                 }
-                if !parent_existed_before {
-                    // Restrict the parent directory to the current user only
-                    // (rwx------). Combined with the 0600 socket file below,
-                    // this prevents other local users from connecting to the
-                    // MCP socket and mutating our DB.
-                    if let Err(e) =
-                        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-                    {
-                        eprintln!("portsage: cannot chmod 0700 on {}: {e}", parent.display());
-                    }
+                if parent_existed_before {
+                    external_parent_policy = true;
+                } else if let Err(e) =
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                {
+                    eprintln!("portsage: cannot chmod 0700 on {}: {e}", parent.display());
                 }
             }
 
@@ -70,10 +79,17 @@ pub fn start_socket_server_at(db: Arc<Database>, path: PathBuf) {
                 }
             };
 
-            // Restrict socket file to owner-only rw. Belt-and-braces with the 0700 dir.
-            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            // 0660 when an external policy created the parent (systemd-style
+            // shared group install), 0600 otherwise (per-user XDG install).
+            let socket_mode = if external_parent_policy { 0o660 } else { 0o600 };
+            if let Err(e) =
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(socket_mode))
             {
-                eprintln!("portsage: cannot chmod 0600 on {}: {e}", path.display());
+                eprintln!(
+                    "portsage: cannot chmod {:o} on {}: {e}",
+                    socket_mode,
+                    path.display()
+                );
             }
 
             loop {
