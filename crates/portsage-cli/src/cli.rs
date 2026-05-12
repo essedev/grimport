@@ -151,6 +151,23 @@ pub enum Command {
 
     /// Diagnose the local install: socket reachable, app located, etc.
     Doctor,
+
+    /// Manage the Claude Code MCP integration (server files, registration,
+    /// skill, allowlist).
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+
+    /// Check for a newer Portsage release and, when possible, upgrade in place.
+    SelfUpdate {
+        /// Only check for a newer version, don't run an upgrade.
+        #[arg(long)]
+        check: bool,
+        /// Skip the confirmation prompt before running the upgrade.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -159,4 +176,28 @@ pub enum ConfigAction {
     Get,
     /// Set a config value.
     Set { key: String, value: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpAction {
+    /// Lay down the MCP server files, register them with Claude Code, install
+    /// the skill, and add tool permissions.
+    Install {
+        /// Register in `./.mcp.json` next to the cwd instead of `~/.claude.json`.
+        #[arg(long)]
+        project: bool,
+        /// Skip `uv sync` (useful in CI / when uv is not available; you can run
+        /// it manually later from the install dir).
+        #[arg(long)]
+        skip_uv: bool,
+    },
+    /// Reverse the install. By default only de-registers; pass `--wipe` to
+    /// also delete the install dir.
+    Uninstall {
+        /// Also delete the install dir (`<data_dir>/portsage/mcp`).
+        #[arg(long)]
+        wipe: bool,
+    },
+    /// Report the current state of every install artifact.
+    Status,
 }

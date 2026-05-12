@@ -114,6 +114,8 @@ scripts/
 - Thin client: no direct DB access
 - Talks only via the Unix socket to the Rust backend
 - stdio transport for Claude Code integration
+- Socket path resolution mirrors `portsage_client::default_socket_path` (env override > macOS Application Support > Linux `$XDG_RUNTIME_DIR` with `/tmp/portsage-<uid>.sock` fallback). The `PORTSAGE_SOCKET` env var lets the MCP point at a system-wide systemd socket or a forwarded one
+- The four source files (`server.py`, `pyproject.toml`, `uv.lock`, `SKILL.md`) are embedded into the CLI binary via `include_str!` in `crates/portsage-cli/src/mcp.rs`. `portsage mcp install` extracts them to `<data_dir>/portsage/mcp/` (Linux: `~/.local/share/portsage/mcp/`, macOS: `~/Library/Application Support/portsage/mcp/`). The `mcp/` directory in the repo remains the source of truth - any changes there must also rebuild the CLI before they're picked up
 
 ### CLI (`crates/portsage-cli`)
 - Talks to the backend via `portsage-client` (sync UnixStream); never reads the DB directly
@@ -121,6 +123,8 @@ scripts/
 - Output: human (colored on TTY via anstream/anstyle), `--json`, `-q/--quiet`. Errors go to stderr
 - Destructive ops (`release`, `kill`, `kill-project`) refuse to act without `-y` when stdin is not a TTY - piped invocations cannot silently auto-accept
 - Exit codes: 0 ok, 1 generic, 2 usage (clap), 3 backend unreachable, 4 not found, 5 conflict
+- `portsage mcp install/uninstall/status` manages the Claude Code MCP integration without needing the backend running - the embedded files are written, `uv sync` runs, and `~/.claude.json` / `~/.claude/skills/portsage/` / `~/.claude/settings.json` are patched atomically. The same JSON-merge safety (parse-or-bail rather than clobber) used by `install_mcp` in `src-tauri/commands.rs` applies in `crates/portsage-cli/src/mcp.rs`
+- `portsage self-update` shells out to `curl` to fetch the latest GitHub release tag, compares against `env!("CARGO_PKG_VERSION")`, and on macOS with brew available runs `brew update && brew upgrade --cask portsage`. On Linux it prints the release URL rather than overwriting a running binary held open by systemd
 
 ### Headless mode (`--headless` / `-H`)
 - Same binary as the GUI; argv detection in `main.rs` dispatches to `run_headless()` before any Tauri state is constructed

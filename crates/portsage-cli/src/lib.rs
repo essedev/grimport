@@ -1,7 +1,9 @@
 pub mod cli;
+pub mod mcp;
 pub mod output;
+pub mod self_update;
 
-use crate::cli::{Cli, Command, ConfigAction, GlobalOpts};
+use crate::cli::{Cli, Command, ConfigAction, GlobalOpts, McpAction};
 use crate::output::OutputMode;
 use portsage_client::{AutoSpawn, Client, ClientError, PortStatus};
 use std::io::IsTerminal;
@@ -16,6 +18,8 @@ pub enum CliError {
     ServiceNotInProject(String, String),
     UnknownBackend(String),
     Io(std::io::Error),
+    Mcp(mcp::McpError),
+    SelfUpdate(self_update::SelfUpdateError),
 }
 
 impl From<ClientError> for CliError {
@@ -27,6 +31,18 @@ impl From<ClientError> for CliError {
 impl From<std::io::Error> for CliError {
     fn from(e: std::io::Error) -> Self {
         CliError::Io(e)
+    }
+}
+
+impl From<mcp::McpError> for CliError {
+    fn from(e: mcp::McpError) -> Self {
+        CliError::Mcp(e)
+    }
+}
+
+impl From<self_update::SelfUpdateError> for CliError {
+    fn from(e: self_update::SelfUpdateError) -> Self {
+        CliError::SelfUpdate(e)
     }
 }
 
@@ -43,6 +59,8 @@ impl CliError {
             CliError::NoTargetSpecified(_) => 2,
             CliError::AbortedByUser => 1,
             CliError::Io(_) => 1,
+            CliError::Mcp(_) => 1,
+            CliError::SelfUpdate(_) => 1,
         }
     }
 
@@ -66,6 +84,8 @@ impl CliError {
             }
             CliError::AbortedByUser => "aborted".into(),
             CliError::Io(e) => format!("io: {e}"),
+            CliError::Mcp(e) => e.to_string(),
+            CliError::SelfUpdate(e) => e.to_string(),
         }
     }
 }
@@ -367,6 +387,235 @@ fn cmd_config(client: &Client, mode: OutputMode, action: ConfigAction) -> Result
     }
 }
 
+fn cmd_mcp_install(mode: OutputMode, project: bool, skip_uv: bool) -> Result<(), CliError> {
+    use std::io::Write;
+    let scope = if project {
+        mcp::Scope::Project
+    } else {
+        mcp::Scope::Global
+    };
+    let report = mcp::install(scope, skip_uv)?;
+    let mut out = anstream::stdout().lock();
+    match mode {
+        OutputMode::Json => {
+            output::print_json(&serde_json::json!({
+                "mcp_dir": report.mcp_dir.to_string_lossy(),
+                "claude_config": report.claude_config.to_string_lossy(),
+                "skill_file": report.skill_file.to_string_lossy(),
+                "settings_file": report.settings_file.to_string_lossy(),
+                "uv_synced": !skip_uv,
+            }))?;
+        }
+        OutputMode::Quiet => {
+            writeln!(out, "{}", report.mcp_dir.display())?;
+        }
+        OutputMode::Human => {
+            writeln!(out, "MCP files:     {}", report.mcp_dir.display())?;
+            writeln!(
+                out,
+                "Registered in: {} ({})",
+                report.claude_config.display(),
+                match scope {
+                    mcp::Scope::Global => "global",
+                    mcp::Scope::Project => "project",
+                }
+            )?;
+            writeln!(out, "Skill:         {}", report.skill_file.display())?;
+            writeln!(out, "Permissions:   {}", report.settings_file.display())?;
+            if skip_uv {
+                writeln!(
+                    out,
+                    "Skipped `uv sync`. Run it manually: cd {} && uv sync",
+                    report.mcp_dir.display()
+                )?;
+            }
+            writeln!(out, "Restart Claude Code to load the new MCP server.")?;
+        }
+    }
+    Ok(())
+}
+
+fn cmd_mcp_uninstall(mode: OutputMode, wipe: bool) -> Result<(), CliError> {
+    use std::io::Write;
+    let report = mcp::uninstall(wipe)?;
+    let mut out = anstream::stdout().lock();
+    match mode {
+        OutputMode::Json => {
+            output::print_json(&serde_json::json!({
+                "unregistered_global": report.unregistered_global,
+                "unregistered_project": report.unregistered_project,
+                "skill_removed": report.skill_removed,
+                "permissions_removed": report.permissions_removed,
+                "files_removed": report.files_removed,
+            }))?;
+        }
+        OutputMode::Quiet => {}
+        OutputMode::Human => {
+            writeln!(
+                out,
+                "Global registration:  {}",
+                yes_no(report.unregistered_global)
+            )?;
+            writeln!(
+                out,
+                "Project registration: {}",
+                yes_no(report.unregistered_project)
+            )?;
+            writeln!(
+                out,
+                "Skill removed:        {}",
+                yes_no(report.skill_removed)
+            )?;
+            writeln!(
+                out,
+                "Permissions removed:  {} entries",
+                report.permissions_removed
+            )?;
+            writeln!(
+                out,
+                "Install dir wiped:    {}",
+                yes_no(report.files_removed)
+            )?;
+            if !wipe {
+                writeln!(
+                    out,
+                    "(Files at {} were kept; pass --wipe to delete them.)",
+                    mcp::install_dir().display()
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_mcp_status(mode: OutputMode) -> Result<(), CliError> {
+    use std::io::Write;
+    let s = mcp::status()?;
+    let mut out = anstream::stdout().lock();
+    match mode {
+        OutputMode::Json => output::print_json(&s)?,
+        OutputMode::Quiet => {
+            writeln!(out, "{}", s.mcp_dir)?;
+        }
+        OutputMode::Human => {
+            writeln!(out, "MCP dir:              {}", s.mcp_dir)?;
+            writeln!(out, "  files present:      {}", yes_no(s.files_present))?;
+            writeln!(out, "  uv available:       {}", yes_no(s.uv_available))?;
+            writeln!(out, "Registered (global):  {}", yes_no(s.registered_global))?;
+            writeln!(
+                out,
+                "Registered (cwd):     {}",
+                yes_no(s.registered_project_cwd)
+            )?;
+            writeln!(out, "Skill installed:      {}", yes_no(s.skill_installed))?;
+            writeln!(
+                out,
+                "Allowlist has tools:  {}",
+                yes_no(s.allowlist_has_portsage)
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn yes_no(b: bool) -> &'static str {
+    if b {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn cmd_self_update(mode: OutputMode, check_only: bool, yes: bool) -> Result<(), CliError> {
+    use std::io::Write;
+    let current = self_update::current_version().to_string();
+    let latest = self_update::fetch_latest_version()?;
+    let cmp = self_update::compare_versions(&current, &latest);
+    let mut out = anstream::stdout().lock();
+
+    match mode {
+        OutputMode::Json => {
+            output::print_json(&serde_json::json!({
+                "current": current,
+                "latest": latest,
+                "status": match cmp {
+                    self_update::VersionCmp::UpToDate => "up_to_date",
+                    self_update::VersionCmp::Outdated => "outdated",
+                    self_update::VersionCmp::Ahead => "ahead",
+                    self_update::VersionCmp::Unknown => "unknown",
+                },
+            }))?;
+        }
+        OutputMode::Quiet => {
+            writeln!(out, "{current} {latest}")?;
+        }
+        OutputMode::Human => {
+            writeln!(out, "Current version: {current}")?;
+            writeln!(out, "Latest release:  {latest}")?;
+            match cmp {
+                self_update::VersionCmp::UpToDate => {
+                    writeln!(out, "Up to date.")?;
+                }
+                self_update::VersionCmp::Ahead => {
+                    writeln!(
+                        out,
+                        "This build is ahead of the latest published release. Nothing to do."
+                    )?;
+                }
+                self_update::VersionCmp::Outdated => {
+                    writeln!(out, "A newer release is available.")?;
+                }
+                self_update::VersionCmp::Unknown => {
+                    writeln!(
+                        out,
+                        "Unable to compare versions automatically. See {}",
+                        self_update::RELEASES_PAGE_URL
+                    )?;
+                }
+            }
+        }
+    }
+
+    if check_only {
+        return Ok(());
+    }
+    if !matches!(
+        cmp,
+        self_update::VersionCmp::Outdated | self_update::VersionCmp::Unknown
+    ) {
+        return Ok(());
+    }
+
+    // On macOS with brew, offer the auto-upgrade path. Elsewhere, print
+    // instructions and stop.
+    if cfg!(target_os = "macos") && self_update::has_brew() {
+        confirm(
+            &format!("upgrade portsage from {current} to {latest} via brew?"),
+            yes,
+        )?;
+        self_update::brew_upgrade()?;
+        if !matches!(mode, OutputMode::Json | OutputMode::Quiet) {
+            writeln!(out, "brew upgrade --cask portsage completed.")?;
+        }
+    } else if cfg!(target_os = "macos") {
+        if !matches!(mode, OutputMode::Json | OutputMode::Quiet) {
+            writeln!(
+                out,
+                "Homebrew not detected. Download the DMG manually: {}",
+                self_update::RELEASES_PAGE_URL
+            )?;
+        }
+    } else {
+        // Linux (and anything else): packaged tarball under sudo. Don't try to
+        // overwrite a running binary - just point at the release page.
+        if !matches!(mode, OutputMode::Json | OutputMode::Quiet) {
+            writeln!(out, "Download the Linux tarball and re-run install.sh:")?;
+            writeln!(out, "  {}", self_update::RELEASES_PAGE_URL)?;
+        }
+    }
+    Ok(())
+}
+
 fn cmd_doctor(opts: &GlobalOpts, mode: OutputMode) -> Result<(), CliError> {
     use std::io::Write;
     let client = make_client(opts)?;
@@ -418,9 +667,29 @@ fn cmd_doctor(opts: &GlobalOpts, mode: OutputMode) -> Result<(), CliError> {
 
 pub fn run(cli: Cli) -> Result<(), CliError> {
     let mode = OutputMode::from_flags(cli.global.json, cli.global.quiet);
-    let client = make_client(&cli.global)?;
-
     let yes = cli.global.yes;
+
+    // MCP setup and self-update don't need a backend connection. Handle them
+    // before constructing a client so we don't autospawn the app just to copy
+    // some files or hit the GitHub API.
+    match cli.command {
+        Command::Mcp { action } => {
+            return match action {
+                McpAction::Install { project, skip_uv } => cmd_mcp_install(mode, project, skip_uv),
+                McpAction::Uninstall { wipe } => cmd_mcp_uninstall(mode, wipe),
+                McpAction::Status => cmd_mcp_status(mode),
+            };
+        }
+        Command::SelfUpdate {
+            check,
+            yes: upd_yes,
+        } => {
+            return cmd_self_update(mode, check, upd_yes || yes);
+        }
+        _ => {}
+    }
+
+    let client = make_client(&cli.global)?;
     match cli.command {
         Command::List {
             here,
@@ -451,6 +720,8 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         } => cmd_open(&client, mode, target, project, here),
         Command::Config { action } => cmd_config(&client, mode, action),
         Command::Doctor => cmd_doctor(&cli.global, mode),
+        // Handled above before the client is built. Unreachable in practice.
+        Command::Mcp { .. } | Command::SelfUpdate { .. } => unreachable!(),
     }
 }
 

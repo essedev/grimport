@@ -67,3 +67,45 @@ pub fn default_socket_path() -> PathBuf {
         None => PathBuf::from("/tmp/portsage.sock"),
     }
 }
+
+/// Default per-OS data directory for Portsage, where the SQLite DB lives and
+/// where the CLI extracts the embedded MCP server files. Mirrors
+/// `paths::data_dir` from the app crate so the CLI can resolve it without
+/// pulling in `dirs` or the Tauri toolchain.
+///
+///   - macOS:   `~/Library/Application Support/portsage`
+///   - Linux:   `$XDG_DATA_HOME/portsage`, default `~/.local/share/portsage`
+///   - Windows: `%APPDATA%/portsage`
+pub fn default_data_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        return std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("portsage");
+    }
+
+    if cfg!(target_os = "windows") {
+        return std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("portsage");
+    }
+
+    // Linux and other unix.
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("portsage")
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::default_data_dir;
+
+    #[test]
+    fn default_data_dir_ends_in_portsage() {
+        let p = default_data_dir();
+        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("portsage"));
+    }
+}
