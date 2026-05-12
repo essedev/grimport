@@ -1,11 +1,11 @@
-use crate::actions::{
-    self, KillOutcome, PortStatus, ProjectStatus,
-};
-use crate::db::Database;
-use crate::scanner::{scan_active_ports, ActivePort};
+use crate::actions::{self, KillOutcome, PortStatus, ProjectStatus};
+use crate::backends::{BackendRouter, BackendTarget, RemoteBackendForm, TunnelStatus};
+use crate::db::{Database, RemoteBackend};
+use crate::scanner::ActivePort;
+use portsage_client::{ConfigSnapshot, KillEntry, RangeBounds};
 use std::path::Path;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// Read and parse a JSON file at `path`. If the file does not exist, returns
 /// an empty object. If the file exists but is malformed, returns Err with a
@@ -28,77 +28,89 @@ fn parse_existing_or_empty(path: &Path) -> Result<serde_json::Value, String> {
     })
 }
 
+// === Project & port commands ===
+//
+// These dispatch via `BackendRouter::client()` so the active backend (Local
+// or one of the Remote ones configured in Settings) drives every read and
+// write. The Tauri command signatures still take `i64` IDs because that's
+// what the frontend has cached from a previous list_all - resolution from
+// id to name happens inside the command and travels exactly once.
+
 #[tauri::command]
-pub fn list_projects(db: State<Arc<Database>>) -> Result<Vec<ProjectStatus>, String> {
-    actions::list_with_status(&db)
+pub fn list_projects(router: State<Arc<BackendRouter>>) -> Result<Vec<ProjectStatus>, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.list_all()
 }
 
 #[tauri::command]
 pub fn create_project(
-    db: State<Arc<Database>>,
+    router: State<Arc<BackendRouter>>,
     name: String,
     path: Option<String>,
 ) -> Result<ProjectStatus, String> {
-    let project = db
-        .create_project(&name, path.as_deref())
-        .map_err(|e| e.to_string())?;
-    Ok(ProjectStatus {
-        id: project.id,
-        name: project.name,
-        path: project.path,
-        range_start: project.range_start,
-        range_end: project.range_end,
-        created_at: project.created_at,
-        ports: Vec::new(),
-    })
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.reserve_range(&name, path.as_deref())
 }
 
 #[tauri::command]
-pub fn delete_project(db: State<Arc<Database>>, id: i64) -> Result<(), String> {
-    db.delete_project(id).map_err(|e| e.to_string())
+pub fn delete_project(router: State<Arc<BackendRouter>>, id: i64) -> Result<(), String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    let projects = client.list_all()?;
+    let proj = projects
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| format!("project {id} not found"))?;
+    client.release_project(&proj.name)
 }
 
 #[tauri::command]
 pub fn add_port(
-    db: State<Arc<Database>>,
+    router: State<Arc<BackendRouter>>,
     project_id: i64,
     service: String,
     port: i64,
 ) -> Result<PortStatus, String> {
-    let p = db
-        .add_port(project_id, &service, port)
-        .map_err(|e| e.to_string())?;
-    let active = scan_active_ports();
-    Ok(PortStatus {
-        active: active.contains(&p.port),
-        process: None,
-        pid: None,
-        id: p.id,
-        project_id: p.project_id,
-        service: p.service,
-        port: p.port,
-        created_at: p.created_at,
-    })
+    let client = router.client().map_err(|e| e.to_string())?;
+    let projects = client.list_all()?;
+    let proj = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("project {project_id} not found"))?;
+    client.register_port(&proj.name, &service, port)
 }
 
 #[tauri::command]
-pub fn remove_port(db: State<Arc<Database>>, id: i64) -> Result<(), String> {
-    db.remove_port(id).map_err(|e| e.to_string())
+pub fn remove_port(router: State<Arc<BackendRouter>>, id: i64) -> Result<(), String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    let projects = client.list_all()?;
+    for p in &projects {
+        for port in &p.ports {
+            if port.id == id {
+                return client.remove_port(&p.name, &port.service);
+            }
+        }
+    }
+    Err(format!("port {id} not found"))
 }
 
 #[tauri::command]
-pub fn scan_ports() -> Vec<i64> {
-    actions::scan_active_port_numbers()
+pub fn scan_ports(router: State<Arc<BackendRouter>>) -> Result<Vec<i64>, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    let mut ports: Vec<i64> = client.scan_active()?.into_iter().map(|p| p.port).collect();
+    ports.sort();
+    Ok(ports)
 }
 
 #[tauri::command]
-pub fn list_unmanaged_ports(db: State<Arc<Database>>) -> Result<Vec<ActivePort>, String> {
-    actions::list_unmanaged(&db)
+pub fn list_unmanaged_ports(router: State<Arc<BackendRouter>>) -> Result<Vec<ActivePort>, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.list_unmanaged()
 }
 
 #[tauri::command]
-pub fn get_next_range(db: State<Arc<Database>>) -> Result<(i64, i64), String> {
-    actions::next_range(&db)
+pub fn get_next_range(router: State<Arc<BackendRouter>>) -> Result<RangeBounds, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.next_range()
 }
 
 #[tauri::command]
@@ -120,39 +132,48 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_in_browser(port: i64) -> Result<(), String> {
-    actions::open_in_browser(port)
+pub fn open_in_browser(router: State<Arc<BackendRouter>>, port: i64) -> Result<(), String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.open_in_browser(port)
 }
 
 #[tauri::command]
-pub async fn kill_port(port: i64) -> Result<KillOutcome, String> {
-    Ok(actions::kill_port_action(port).await)
+pub async fn kill_port(
+    router: State<'_, Arc<BackendRouter>>,
+    port: i64,
+) -> Result<KillOutcome, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.kill_port(port).await
 }
 
 #[tauri::command]
 pub async fn kill_project(
-    db: State<'_, Arc<Database>>,
+    router: State<'_, Arc<BackendRouter>>,
     project_id: i64,
-) -> Result<Vec<(i64, KillOutcome)>, String> {
-    actions::kill_project_action(&db, project_id).await
+) -> Result<Vec<KillEntry>, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    let projects = client.list_all()?;
+    let proj = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("project {project_id} not found"))?;
+    client.kill_project(&proj.name).await
 }
 
 #[tauri::command]
-pub fn get_config(db: State<Arc<Database>>) -> Result<serde_json::Value, String> {
-    let (base_port, range_size) = actions::get_config(&db)?;
-    Ok(serde_json::json!({
-        "base_port": base_port,
-        "range_size": range_size,
-    }))
+pub fn get_config(router: State<Arc<BackendRouter>>) -> Result<ConfigSnapshot, String> {
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.get_config()
 }
 
 #[tauri::command]
 pub fn set_config(
-    db: State<Arc<Database>>,
+    router: State<Arc<BackendRouter>>,
     key: String,
     value: String,
 ) -> Result<(), String> {
-    actions::set_config(&db, &key, &value)
+    let client = router.client().map_err(|e| e.to_string())?;
+    client.set_config(&key, &value)
 }
 
 #[tauri::command]
@@ -168,11 +189,13 @@ pub fn export_data(db: State<Arc<Database>>, dest_path: String) -> Result<(), St
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    zip.start_file("portsage.db", options).map_err(|e| e.to_string())?;
+    zip.start_file("portsage.db", options)
+        .map_err(|e| e.to_string())?;
     let db_bytes = std::fs::read(&db_path).map_err(|e| e.to_string())?;
     std::io::Write::write_all(&mut zip, &db_bytes).map_err(|e| e.to_string())?;
 
-    zip.start_file("config.json", options).map_err(|e| e.to_string())?;
+    zip.start_file("config.json", options)
+        .map_err(|e| e.to_string())?;
     let base_port = db.get_config("base_port").unwrap_or("4000".into());
     let range_size = db.get_config("range_size").unwrap_or("10".into());
     let config = serde_json::json!({
@@ -253,12 +276,10 @@ pub fn get_mcp_dir(app: tauri::AppHandle) -> Result<String, String> {
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let dev_mcp = exe
-        .ancestors()
-        .find_map(|p| {
-            let candidate = p.join("mcp").join("server.py");
-            candidate.exists().then(|| p.join("mcp"))
-        });
+    let dev_mcp = exe.ancestors().find_map(|p| {
+        let candidate = p.join("mcp").join("server.py");
+        candidate.exists().then(|| p.join("mcp"))
+    });
 
     if let Some(path) = dev_mcp {
         return Ok(path.to_string_lossy().to_string());
@@ -278,8 +299,7 @@ pub fn check_mcp_installed() -> Result<bool, String> {
     }
 
     let content = std::fs::read_to_string(&claude_json).map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
     Ok(parsed["mcpServers"]["portsage"].is_object())
 }
@@ -351,8 +371,12 @@ pub fn install_mcp(mcp_dir: String) -> Result<(), String> {
             allow_set.push(tool.to_string());
         }
     }
-    settings["permissions"]["allow"] =
-        serde_json::Value::Array(allow_set.into_iter().map(serde_json::Value::String).collect());
+    settings["permissions"]["allow"] = serde_json::Value::Array(
+        allow_set
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect(),
+    );
 
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -365,6 +389,181 @@ pub fn install_mcp(mcp_dir: String) -> Result<(), String> {
 
     Ok(())
 }
+
+// === Remote backends (Phase 2) ===
+//
+// CRUD commands for the `remote_backends` table plus a `test_remote_backend`
+// command that exercises the BackendRouter end-to-end. These commands sit on
+// top of `BackendRouter`; the existing project/port commands above still talk
+// to the local DB directly (the routing refactor lands in Phase 2.7).
+
+/// Tauri event name emitted whenever a backend's tunnel state changes. The
+/// payload is a `TunnelStatus`. The frontend listens on this to update the
+/// status dot in the sidebar without polling.
+pub const TUNNEL_EVENT: &str = "tunnel://state-changed";
+
+#[tauri::command]
+pub fn list_remote_backends(
+    router: State<Arc<BackendRouter>>,
+) -> Result<Vec<RemoteBackend>, String> {
+    router
+        .database()
+        .list_remote_backends()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_remote_backend(
+    router: State<Arc<BackendRouter>>,
+    form: RemoteBackendForm,
+) -> Result<RemoteBackend, String> {
+    router
+        .database()
+        .create_remote_backend(form.as_input())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_remote_backend(
+    router: State<Arc<BackendRouter>>,
+    id: i64,
+    form: RemoteBackendForm,
+) -> Result<RemoteBackend, String> {
+    router
+        .database()
+        .update_remote_backend(id, form.as_input())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_remote_backend(
+    app: tauri::AppHandle,
+    router: State<Arc<BackendRouter>>,
+    id: i64,
+) -> Result<(), String> {
+    // Close any open tunnel first so we don't leak an ssh child for a backend
+    // that no longer exists in the catalogue. Look up the row to get its name
+    // before we delete it.
+    let row = router
+        .database()
+        .list_remote_backends()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|b| b.id == id);
+    if let Some(b) = row.as_ref() {
+        router
+            .manager()
+            .close_tunnel(&b.name)
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            TUNNEL_EVENT,
+            TunnelStatus {
+                backend_name: b.name.clone(),
+                ssh_alias: b.ssh_alias.clone(),
+                remote_socket: b.remote_socket_path.clone(),
+                local_socket: b.local_socket_path.clone(),
+                state: crate::backends::TunnelState::Disconnected,
+            },
+        );
+    }
+    router
+        .database()
+        .delete_remote_backend(id)
+        .map_err(|e| e.to_string())?;
+    // If the user removed the backend they were viewing, snap back to Local.
+    let current = router.current();
+    if let BackendTarget::Remote { name } = &current {
+        if let Some(b) = row {
+            if &b.name == name {
+                router
+                    .set_current(BackendTarget::Local)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_remote_backend_auto_forward(
+    router: State<Arc<BackendRouter>>,
+    id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    router
+        .database()
+        .set_remote_backend_auto_forward(id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// Probe an existing backend end-to-end: ensure the tunnel is open, then
+/// call `list_all` on the remote side. Returns the project count on success
+/// and a verbatim error otherwise (so the UI can show "Permission denied"
+/// or "Host key verification failed" rather than a generic "tunnel error").
+/// Emits a `TUNNEL_EVENT` with the resulting state.
+#[tauri::command]
+pub fn test_remote_backend(
+    app: tauri::AppHandle,
+    router: State<Arc<BackendRouter>>,
+    name: String,
+) -> Result<usize, String> {
+    let target = BackendTarget::Remote { name: name.clone() };
+    let result = (|| -> Result<usize, String> {
+        let client = router.client_for(&target).map_err(|e| e.to_string())?;
+        let projects = client.list_all()?;
+        Ok(projects.len())
+    })();
+    emit_tunnel_status(&app, &router, &name);
+    result
+}
+
+#[tauri::command]
+pub fn get_current_backend(router: State<Arc<BackendRouter>>) -> Result<BackendTarget, String> {
+    Ok(router.current())
+}
+
+#[tauri::command]
+pub fn set_current_backend(
+    router: State<Arc<BackendRouter>>,
+    target: BackendTarget,
+) -> Result<(), String> {
+    router.set_current(target).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_tunnel_statuses(router: State<Arc<BackendRouter>>) -> Result<Vec<TunnelStatus>, String> {
+    Ok(router.manager().statuses())
+}
+
+#[tauri::command]
+pub fn close_tunnel(
+    app: tauri::AppHandle,
+    router: State<Arc<BackendRouter>>,
+    name: String,
+) -> Result<(), String> {
+    router
+        .manager()
+        .close_tunnel(&name)
+        .map_err(|e| e.to_string())?;
+    emit_tunnel_status(&app, &router, &name);
+    Ok(())
+}
+
+/// Look up the current tunnel status for `name` and emit it via `TUNNEL_EVENT`.
+/// Silent no-op if no entry exists yet - that's fine, the frontend would only
+/// care about a state change, not the absence of one.
+fn emit_tunnel_status(app: &tauri::AppHandle, router: &BackendRouter, name: &str) {
+    if let Some(status) = router
+        .manager()
+        .statuses()
+        .into_iter()
+        .find(|s| s.backend_name == name)
+    {
+        let _ = app.emit(TUNNEL_EVENT, status);
+    }
+}
+
+// (uninstall_mcp follows)
 
 #[tauri::command]
 pub fn uninstall_mcp() -> Result<(), String> {

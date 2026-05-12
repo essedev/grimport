@@ -6,6 +6,12 @@ import { UIDivider } from "@/components/ui/UIDivider";
 import { UIBadge } from "@/components/ui/UIBadge";
 import { UISelect } from "@/components/ui/UISelect";
 import { UITabs, UITabPanel } from "@/components/ui/UITabs";
+import { RemoteBackendsPanel } from "@/components/RemoteBackendsPanel";
+import type {
+  BackendTarget,
+  RemoteBackend,
+  TunnelState,
+} from "@/lib/types";
 import {
   CheckCircle,
   XCircle,
@@ -121,7 +127,7 @@ function CodeBlock({ code, label }: { code: string; label: string }) {
   );
 }
 
-export type SettingsTab = "general" | "integrations" | "data";
+export type SettingsTab = "general" | "integrations" | "data" | "backends";
 
 interface SettingsPanelProps {
   // Optional controlled tab state, used for deep-linking from other panels
@@ -129,9 +135,22 @@ interface SettingsPanelProps {
   // state when not provided.
   tab?: SettingsTab;
   onTabChange?: (tab: SettingsTab) => void;
+  // Multi-host (Phase 2). Threaded through from App's useBackends so the
+  // sidebar switcher and this panel share a single state store.
+  remoteBackends?: RemoteBackend[];
+  tunnels?: Record<string, TunnelState>;
+  backendTarget?: BackendTarget | null;
+  onBackendsChanged?: () => void;
 }
 
-export function SettingsPanel({ tab: controlledTab, onTabChange }: SettingsPanelProps = {}) {
+export function SettingsPanel({
+  tab: controlledTab,
+  onTabChange,
+  remoteBackends = [],
+  tunnels = {},
+  backendTarget = null,
+  onBackendsChanged,
+}: SettingsPanelProps = {}) {
   const { showSuccess, showError } = useToast();
   const confirm = useConfirm();
   const [internalTab, setInternalTab] = useState<SettingsTab>("general");
@@ -293,6 +312,7 @@ export function SettingsPanel({ tab: controlledTab, onTabChange }: SettingsPanel
           options={[
             { value: "general", label: "General" },
             { value: "integrations", label: "Integrations" },
+            { value: "backends", label: "Remote backends" },
             { value: "data", label: "Data" },
           ]}
         />
@@ -501,6 +521,15 @@ export function SettingsPanel({ tab: controlledTab, onTabChange }: SettingsPanel
               )}
             </section>
           </div>
+        </UITabPanel>
+
+        <UITabPanel value="backends" active={tab}>
+          <RemoteBackendsPanel
+            remotes={remoteBackends}
+            tunnels={tunnels}
+            currentTarget={backendTarget}
+            onChanged={() => onBackendsChanged?.()}
+          />
         </UITabPanel>
 
         <UITabPanel value="data" active={tab}>

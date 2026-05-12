@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-tests:
+    name: Rust tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            cargo-flags: ""
+          # The Linux runner builds with `--no-default-features` so the
+          # workspace skips the Tauri toolchain (which would need GTK +
+          # webkit2gtk system packages just to compile).
+          - os: ubuntu-latest
+            cargo-flags: "--no-default-features"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The macOS lane builds the full Tauri app and runs its tests. The Linux
+      # lane builds only the headless server crates plus portsage-client and
+      # portsage-cli - it is the regression net for the Linux server target.
+      - name: cargo test
+        run: cargo test --workspace ${{ matrix.cargo-flags }}
+
+      - name: cargo clippy
+        run: cargo clippy --workspace ${{ matrix.cargo-flags }} --all-targets
+
+  frontend-tests:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: pnpm test
+        run: pnpm test

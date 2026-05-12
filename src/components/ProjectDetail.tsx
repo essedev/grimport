@@ -9,7 +9,13 @@ import { UIBadge } from "@/components/ui/UIBadge";
 import { PortRow } from "@/components/PortRow";
 import { AddPortForm } from "@/components/AddPortForm";
 import * as cmd from "@/lib/commands";
-import type { ProjectStatus, PortStatus, KillOutcome } from "@/lib/types";
+import type { KillEntry } from "@/lib/commands";
+import type {
+  BackendTarget,
+  ProjectStatus,
+  PortStatus,
+  KillOutcome,
+} from "@/lib/types";
 
 interface ProjectDetailProps {
   project: ProjectStatus;
@@ -17,9 +23,15 @@ interface ProjectDetailProps {
   onAddPort: (projectId: number, service: string, port: number) => void;
   onRemovePort: (id: number) => void;
   onKillPort: (port: number) => Promise<KillOutcome | null>;
-  onKillProject: (
-    projectId: number,
-  ) => Promise<Array<[number, KillOutcome]> | null>;
+  onKillProject: (projectId: number) => Promise<KillEntry[] | null>;
+  /**
+   * Active backend target. Drives display-only choices: when targeting a
+   * Remote backend the project's filesystem path lives on the remote host,
+   * so the "Open in Finder" / "Open in Terminal" buttons are hidden (they'd
+   * open the Mac's local view of that path, which is almost never what the
+   * user wants).
+   */
+  backendTarget?: BackendTarget | null;
 }
 
 export function ProjectDetail({
@@ -29,7 +41,9 @@ export function ProjectDetail({
   onRemovePort,
   onKillPort,
   onKillProject,
+  backendTarget,
 }: ProjectDetailProps) {
+  const isRemote = backendTarget?.kind === "remote";
   const [showAddPort, setShowAddPort] = useState(false);
   const confirm = useConfirm();
   const { showError, showSuccess } = useToast();
@@ -109,19 +123,19 @@ export function ProjectDetail({
     }
   };
 
-  const reportProjectOutcomes = (results: Array<[number, KillOutcome]>) => {
+  const reportProjectOutcomes = (results: KillEntry[]) => {
     if (results.length === 0) {
       showSuccess("No active ports to stop");
       return;
     }
-    const denied = results.filter(([, o]) => o === "permission_denied");
+    const denied = results.filter((e) => e.outcome === "permission_denied");
     if (denied.length > 0) {
-      const ports = denied.map(([p]) => p).join(", ");
+      const ports = denied.map((e) => e.port).join(", ");
       showError(`Permission denied for port${denied.length === 1 ? "" : "s"} ${ports}`);
       return;
     }
-    const killed = results.filter(([, o]) => o === "killed").length;
-    const terminated = results.filter(([, o]) => o === "terminated").length;
+    const killed = results.filter((e) => e.outcome === "killed").length;
+    const terminated = results.filter((e) => e.outcome === "terminated").length;
     const parts: string[] = [];
     if (terminated > 0) parts.push(`${terminated} stopped`);
     if (killed > 0) parts.push(`${killed} force-killed`);
@@ -145,7 +159,7 @@ export function ProjectDetail({
             don't sit next to destructive actions (stop processes, delete project).
             A subtle vertical divider reinforces the separation. */}
         <div className="flex items-center gap-[var(--spacing-3)]">
-          {project.path && (
+          {project.path && !isRemote && (
             <div className="flex items-center gap-[var(--spacing-1)]">
               <UIButton
                 variant="ghost"
@@ -167,7 +181,7 @@ export function ProjectDetail({
               </UIButton>
             </div>
           )}
-          {project.path && (
+          {project.path && !isRemote && (
             <div
               aria-hidden="true"
               className="h-5 w-px bg-border-subtle"

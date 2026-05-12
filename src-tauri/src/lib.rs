@@ -1,10 +1,14 @@
 mod actions;
+mod backends;
+#[cfg(feature = "gui")]
 mod commands;
 mod db;
+mod paths;
 mod scanner;
 mod socket;
 
 use db::Database;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Returns true when the process should run as a headless backend (socket
@@ -16,25 +20,43 @@ pub fn is_headless_argv<S: AsRef<str>>(args: &[S]) -> bool {
         .any(|a| matches!(a.as_ref(), "--headless" | "-H"))
 }
 
+/// Parse `--socket <path>` (or `--socket=<path>`) from argv. Returns the
+/// override path if present. Used by `run_headless()` so the systemd unit can
+/// place the socket somewhere other than the per-user XDG default (e.g.
+/// `/run/portsage/portsage.sock` for the system-wide service).
+pub fn parse_socket_argv<S: AsRef<str>>(args: &[S]) -> Option<PathBuf> {
+    let mut iter = args.iter().skip(1);
+    while let Some(a) = iter.next() {
+        let a = a.as_ref();
+        if a == "--socket" {
+            if let Some(next) = iter.next() {
+                return Some(PathBuf::from(next.as_ref()));
+            }
+        } else if let Some(val) = a.strip_prefix("--socket=") {
+            return Some(PathBuf::from(val));
+        }
+    }
+    None
+}
+
 /// Cheap liveness probe: another Portsage process is already serving the
 /// socket if a plain Unix-domain connect to `path` succeeds.
 fn another_instance_alive_at(path: &std::path::Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
-/// Used by `run_headless` to refuse to start a second backend that would
-/// clobber the existing one's socket file.
-fn another_instance_alive() -> bool {
-    another_instance_alive_at(&portsage_client::default_socket_path())
-}
-
 /// Headless mode: spin up the socket server only, then block on SIGINT / SIGTERM.
 /// Used by the CLI's autospawn flow and by anyone who wants the backend in CI
 /// or scripted contexts without the menubar UI.
 pub fn run_headless() {
-    if another_instance_alive() {
+    let args: Vec<String> = std::env::args().collect();
+    let socket_override = parse_socket_argv(&args);
+    let socket_path = paths::resolve_socket_path(socket_override.as_deref());
+
+    if another_instance_alive_at(&socket_path) {
         eprintln!(
-            "portsage: another instance is already serving the socket; exiting cleanly"
+            "portsage: another instance is already serving {}; exiting cleanly",
+            socket_path.display()
         );
         return;
     }
@@ -47,8 +69,11 @@ pub fn run_headless() {
         }
     };
 
-    socket::start_socket_server(database);
-    eprintln!("portsage: headless backend ready");
+    socket::start_socket_server_at(database, socket_path.clone());
+    eprintln!(
+        "portsage: headless backend ready ({})",
+        socket_path.display()
+    );
 
     // Block on either SIGINT (Ctrl-C) or SIGTERM (`kill <pid>`, brew upgrade
     // shutdowns). Without the SIGTERM handler the process would die hard on
@@ -90,18 +115,16 @@ pub fn run_headless() {
     });
     eprintln!("portsage: shutting down");
 }
+#[cfg(feature = "gui")]
 use tauri::{
-    Manager,
-    tray::TrayIconEvent,
-    tray::MouseButton,
-    tray::MouseButtonState,
-    PhysicalPosition,
+    tray::MouseButton, tray::MouseButtonState, tray::TrayIconEvent, Manager, PhysicalPosition,
     RunEvent, WindowEvent,
 };
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "gui", target_os = "macos"))]
 use tauri::ActivationPolicy;
 
+#[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let database = match Database::new() {
@@ -114,6 +137,12 @@ pub fn run() {
 
     // Start Unix socket server for MCP
     socket::start_socket_server(database.clone());
+
+    // Per-process singleton that routes Tauri commands to the active backend
+    // (Local or one of the configured Remote backends). Holds the SSH tunnel
+    // map and the persisted current-target selection.
+    let router: Arc<backends::BackendRouter> =
+        Arc::new(backends::BackendRouter::new(database.clone()));
 
     let mut app = tauri::Builder::default()
         // Single-instance must be registered first: if another Portsage process is
@@ -137,6 +166,7 @@ pub fn run() {
             None,
         ))
         .manage(database)
+        .manage(router)
         .invoke_handler(tauri::generate_handler![
             commands::list_projects,
             commands::create_project,
@@ -161,6 +191,16 @@ pub fn run() {
             commands::check_mcp_installed,
             commands::install_mcp,
             commands::uninstall_mcp,
+            commands::list_remote_backends,
+            commands::add_remote_backend,
+            commands::update_remote_backend,
+            commands::remove_remote_backend,
+            commands::set_remote_backend_auto_forward,
+            commands::test_remote_backend,
+            commands::get_current_backend,
+            commands::set_current_backend,
+            commands::get_tunnel_statuses,
+            commands::close_tunnel,
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
@@ -198,9 +238,7 @@ pub fn run() {
                         };
                         let x = px - 175.0 + (sw / 2.0);
                         let y = py + sh;
-                        let _ = popover.set_position(
-                            PhysicalPosition::new(x as i32, y as i32),
-                        );
+                        let _ = popover.set_position(PhysicalPosition::new(x as i32, y as i32));
                         let _ = popover.show();
                         let _ = popover.set_focus();
                     }
@@ -278,6 +316,43 @@ mod tests {
         assert!(!is_headless_argv(&args));
         let args = vec!["portsage", "--other-flag"];
         assert!(!is_headless_argv(&args));
+    }
+
+    #[test]
+    fn parse_socket_argv_handles_separate_arg() {
+        let args = vec![
+            "portsage",
+            "--headless",
+            "--socket",
+            "/run/portsage/portsage.sock",
+        ];
+        assert_eq!(
+            parse_socket_argv(&args),
+            Some(PathBuf::from("/run/portsage/portsage.sock"))
+        );
+    }
+
+    #[test]
+    fn parse_socket_argv_handles_equals_form() {
+        let args = vec!["portsage", "--headless", "--socket=/tmp/foo.sock"];
+        assert_eq!(
+            parse_socket_argv(&args),
+            Some(PathBuf::from("/tmp/foo.sock"))
+        );
+    }
+
+    #[test]
+    fn parse_socket_argv_returns_none_when_absent() {
+        let args = vec!["portsage", "--headless"];
+        assert!(parse_socket_argv(&args).is_none());
+    }
+
+    #[test]
+    fn parse_socket_argv_returns_none_when_missing_value() {
+        // Trailing `--socket` with no value: don't crash, just return None and
+        // let the resolver fall back to defaults.
+        let args = vec!["portsage", "--headless", "--socket"];
+        assert!(parse_socket_argv(&args).is_none());
     }
 
     #[test]

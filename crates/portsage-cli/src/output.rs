@@ -74,7 +74,11 @@ pub fn print_projects(mode: OutputMode, projects: &[ProjectStatus]) -> io::Resul
             writeln!(
                 out,
                 "{b}{:<4} {:<name_w$}  {:<11}  {:<path_w$}  {:<6}{b:#}",
-                "ID", "NAME", "RANGE", "PATH", "PORTS",
+                "ID",
+                "NAME",
+                "RANGE",
+                "PATH",
+                "PORTS",
                 name_w = name_w,
                 path_w = path_w,
             )?;
@@ -120,11 +124,7 @@ pub fn print_project_detail(mode: OutputMode, p: &ProjectStatus) -> io::Result<(
                 "  {d}path:{d:#}   {}",
                 p.path.as_deref().unwrap_or("-")
             )?;
-            writeln!(
-                out,
-                "  {d}range:{d:#}  {}-{}",
-                p.range_start, p.range_end
-            )?;
+            writeln!(out, "  {d}range:{d:#}  {}-{}", p.range_start, p.range_end)?;
             if p.ports.is_empty() {
                 writeln!(out, "  {d}(no ports registered yet){d:#}")?;
             } else {

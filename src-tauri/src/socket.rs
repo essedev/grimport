@@ -1,5 +1,6 @@
 use crate::actions::{self, PortStatus, ProjectStatus};
 use crate::db::Database;
+use crate::paths;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -13,14 +14,12 @@ use tokio::net::UnixListener;
 /// task pinned forever.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-fn socket_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("portsage")
-        .join("portsage.sock")
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn start_socket_server(db: Arc<Database>) {
+    start_socket_server_at(db, paths::socket_path());
 }
 
-pub fn start_socket_server(db: Arc<Database>) {
+pub fn start_socket_server_at(db: Arc<Database>, path: PathBuf) {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
@@ -30,38 +29,50 @@ pub fn start_socket_server(db: Arc<Database>) {
             }
         };
         rt.block_on(async move {
-            let path = socket_path();
             // Remove stale socket file
             let _ = std::fs::remove_file(&path);
             if let Some(parent) = path.parent() {
+                // Track whether we are creating the parent directory so we
+                // only narrow its permissions on the dirs we own. Under
+                // systemd (`RuntimeDirectory=portsage`) the parent already
+                // exists with `RuntimeDirectoryMode=0750` so that the
+                // `portsage` group can connect; chmod 0700 here would
+                // silently break that.
+                let parent_existed_before = parent.exists();
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    eprintln!("portsage: cannot create socket dir {}: {e}", parent.display());
+                    eprintln!(
+                        "portsage: cannot create socket dir {}: {e}",
+                        parent.display()
+                    );
                     return;
                 }
-                // Restrict the parent directory to the current user only (rwx------).
-                // Combined with the 0600 socket file below, this prevents other local
-                // users from connecting to the MCP socket and mutating our DB.
-                if let Err(e) = std::fs::set_permissions(
-                    parent,
-                    std::fs::Permissions::from_mode(0o700),
-                ) {
-                    eprintln!("portsage: cannot chmod 0700 on {}: {e}", parent.display());
+                if !parent_existed_before {
+                    // Restrict the parent directory to the current user only
+                    // (rwx------). Combined with the 0600 socket file below,
+                    // this prevents other local users from connecting to the
+                    // MCP socket and mutating our DB.
+                    if let Err(e) =
+                        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                    {
+                        eprintln!("portsage: cannot chmod 0700 on {}: {e}", parent.display());
+                    }
                 }
             }
 
             let listener = match UnixListener::bind(&path) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("portsage: failed to bind unix socket {}: {e}", path.display());
+                    eprintln!(
+                        "portsage: failed to bind unix socket {}: {e}",
+                        path.display()
+                    );
                     return;
                 }
             };
 
             // Restrict socket file to owner-only rw. Belt-and-braces with the 0700 dir.
-            if let Err(e) = std::fs::set_permissions(
-                &path,
-                std::fs::Permissions::from_mode(0o600),
-            ) {
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
                 eprintln!("portsage: cannot chmod 0600 on {}: {e}", path.display());
             }
 
@@ -72,10 +83,7 @@ pub fn start_socket_server(db: Arc<Database>) {
                         let (reader, mut writer) = stream.into_split();
                         let mut lines = BufReader::new(reader).lines();
                         loop {
-                            let next = tokio::time::timeout(
-                                IDLE_TIMEOUT,
-                                lines.next_line(),
-                            ).await;
+                            let next = tokio::time::timeout(IDLE_TIMEOUT, lines.next_line()).await;
                             let line = match next {
                                 Ok(Ok(Some(line))) => line,
                                 // Idle timeout, EOF, or read error: close the connection.
@@ -309,6 +317,18 @@ pub(crate) async fn handle_request(db: &Database, line: &str) -> Value {
             }
         }
 
+        "get_remote_backend" => {
+            let name = match params["name"].as_str() {
+                Some(n) => n,
+                None => return json!({"error": "missing params.name"}),
+            };
+            match db.get_remote_backend_by_name(name) {
+                Ok(Some(b)) => json!({ "result": b }),
+                Ok(None) => json!({ "result": null }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+
         _ => json!({"error": format!("unknown method: {}", method)}),
     }
 }
@@ -354,7 +374,11 @@ mod tests {
     #[tokio::test]
     async fn reserve_range_returns_full_project_payload() {
         let db = fresh_db();
-        let res = req(&db, r#"{"method":"reserve_range","params":{"name":"test","path":"/tmp/test"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"test","path":"/tmp/test"}}"#,
+        )
+        .await;
         assert_eq!(res["result"]["name"], "test");
         assert_eq!(res["result"]["path"], "/tmp/test");
         // id must come back so the caller can address the project directly.
@@ -368,22 +392,41 @@ mod tests {
     async fn reserve_range_missing_name() {
         let db = fresh_db();
         let res = req(&db, r#"{"method":"reserve_range","params":{}}"#).await;
-        assert!(res["error"].as_str().unwrap().contains("missing params.name"));
+        assert!(res["error"]
+            .as_str()
+            .unwrap()
+            .contains("missing params.name"));
     }
 
     #[tokio::test]
     async fn reserve_range_duplicate_name() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"test"}}"#).await;
-        let res = req(&db, r#"{"method":"reserve_range","params":{"name":"test"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"test"}}"#,
+        )
+        .await;
+        let res = req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"test"}}"#,
+        )
+        .await;
         assert!(res["error"].is_string());
     }
 
     #[tokio::test]
     async fn reserve_range_sequential() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"alpha"}}"#).await;
-        let res = req(&db, r#"{"method":"reserve_range","params":{"name":"bravo"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"alpha"}}"#,
+        )
+        .await;
+        let res = req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"bravo"}}"#,
+        )
+        .await;
         assert_eq!(res["result"]["range_start"], 4010);
     }
 
@@ -392,7 +435,11 @@ mod tests {
     #[tokio::test]
     async fn register_port_returns_full_port_payload() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"test"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"test"}}"#,
+        )
+        .await;
         let res = req(
             &db,
             r#"{"method":"register_port","params":{"project":"test","service":"vite","port":4000}}"#,
@@ -434,7 +481,11 @@ mod tests {
     #[tokio::test]
     async fn list_all_returns_full_project_status_shape() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"alpha","path":"/tmp/alpha"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"alpha","path":"/tmp/alpha"}}"#,
+        )
+        .await;
         req(
             &db,
             r#"{"method":"register_port","params":{"project":"alpha","service":"vite","port":4000}}"#,
@@ -465,8 +516,16 @@ mod tests {
     #[tokio::test]
     async fn release_project_success() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"test"}}"#).await;
-        let res = req(&db, r#"{"method":"release_project","params":{"name":"test"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"test"}}"#,
+        )
+        .await;
+        let res = req(
+            &db,
+            r#"{"method":"release_project","params":{"name":"test"}}"#,
+        )
+        .await;
         assert_eq!(res["result"], "ok");
         let list = req(&db, r#"{"method":"list_all"}"#).await;
         assert!(list["result"].as_array().unwrap().is_empty());
@@ -475,7 +534,11 @@ mod tests {
     #[tokio::test]
     async fn release_project_not_found() {
         let db = fresh_db();
-        let res = req(&db, r#"{"method":"release_project","params":{"name":"ghost"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"release_project","params":{"name":"ghost"}}"#,
+        )
+        .await;
         assert!(res["error"].as_str().unwrap().contains("not found"));
     }
 
@@ -484,7 +547,11 @@ mod tests {
     #[tokio::test]
     async fn remove_port_by_service_succeeds() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"alpha"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"alpha"}}"#,
+        )
+        .await;
         req(
             &db,
             r#"{"method":"register_port","params":{"project":"alpha","service":"vite","port":4000}}"#,
@@ -492,7 +559,8 @@ mod tests {
         let res = req(
             &db,
             r#"{"method":"remove_port","params":{"project":"alpha","service":"vite"}}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(res["result"], "ok");
         let list = req(&db, r#"{"method":"list_all"}"#).await;
         let ports = list["result"][0]["ports"].as_array().unwrap();
@@ -502,18 +570,27 @@ mod tests {
     #[tokio::test]
     async fn remove_port_unknown_service_errors() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"alpha"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"alpha"}}"#,
+        )
+        .await;
         let res = req(
             &db,
             r#"{"method":"remove_port","params":{"project":"alpha","service":"ghost"}}"#,
-        ).await;
+        )
+        .await;
         assert!(res["error"].is_string());
     }
 
     #[tokio::test]
     async fn remove_port_missing_params() {
         let db = fresh_db();
-        let res = req(&db, r#"{"method":"remove_port","params":{"project":"alpha"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"remove_port","params":{"project":"alpha"}}"#,
+        )
+        .await;
         assert!(res["error"].as_str().unwrap().contains("missing"));
     }
 
@@ -560,7 +637,8 @@ mod tests {
         let res = req(
             &db,
             r#"{"method":"set_config","params":{"key":"base_port","value":"5000"}}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(res["result"], "ok");
         let res = req(&db, r#"{"method":"get_config"}"#).await;
         assert_eq!(res["result"]["base_port"], "5000");
@@ -574,8 +652,12 @@ mod tests {
         let res = req(
             &db,
             r#"{"method":"set_config","params":{"key":"secret","value":"x"}}"#,
-        ).await;
-        assert!(res["error"].as_str().unwrap().contains("unknown config key"));
+        )
+        .await;
+        assert!(res["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown config key"));
     }
 
     // --- kill_port (process-free path: nothing listening) ---
@@ -599,12 +681,20 @@ mod tests {
     #[tokio::test]
     async fn kill_project_returns_empty_results_when_nothing_active() {
         let db = fresh_db();
-        req(&db, r#"{"method":"reserve_range","params":{"name":"alpha"}}"#).await;
+        req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"alpha"}}"#,
+        )
+        .await;
         req(
             &db,
             r#"{"method":"register_port","params":{"project":"alpha","service":"vite","port":4000}}"#,
         ).await;
-        let res = req(&db, r#"{"method":"kill_project","params":{"name":"alpha"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"kill_project","params":{"name":"alpha"}}"#,
+        )
+        .await;
         // No process on 4000 -> the registered port is not "active" so it's filtered
         // out before kill_pid_with_escalation runs. Result is an empty list.
         let arr = res["result"].as_array().unwrap();
@@ -614,7 +704,11 @@ mod tests {
     #[tokio::test]
     async fn kill_project_unknown_project_errors() {
         let db = fresh_db();
-        let res = req(&db, r#"{"method":"kill_project","params":{"name":"ghost"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"kill_project","params":{"name":"ghost"}}"#,
+        )
+        .await;
         assert!(res["error"].as_str().unwrap().contains("not found"));
     }
 
@@ -647,14 +741,16 @@ mod tests {
                 r#"{{"method":"reserve_range","params":{{"name":"alpha","path":"{}"}}}}"#,
                 path
             ),
-        ).await;
+        )
+        .await;
         let res = req(
             &db,
             &format!(
                 r#"{{"method":"find_project_by_path","params":{{"path":"{}"}}}}"#,
                 path
             ),
-        ).await;
+        )
+        .await;
         assert_eq!(res["result"]["name"], "alpha");
     }
 
@@ -664,7 +760,8 @@ mod tests {
         let res = req(
             &db,
             r#"{"method":"find_project_by_path","params":{"path":"/no/such/place"}}"#,
-        ).await;
+        )
+        .await;
         assert!(res["result"].is_null());
     }
 
@@ -672,6 +769,47 @@ mod tests {
     async fn find_project_by_path_missing_param() {
         let db = fresh_db();
         let res = req(&db, r#"{"method":"find_project_by_path","params":{}}"#).await;
+        assert!(res["error"].as_str().unwrap().contains("missing"));
+    }
+
+    // --- get_remote_backend ---
+
+    #[tokio::test]
+    async fn get_remote_backend_returns_match() {
+        let db = fresh_db();
+        db.create_remote_backend(crate::db::RemoteBackendInput {
+            name: "dev",
+            ssh_alias: "dev-server",
+            remote_socket_path: "/run/portsage/portsage.sock",
+            local_socket_path: "/tmp/portsage-dev.sock",
+            auto_forward_enabled: false,
+        })
+        .unwrap();
+        let res = req(
+            &db,
+            r#"{"method":"get_remote_backend","params":{"name":"dev"}}"#,
+        )
+        .await;
+        assert_eq!(res["result"]["name"], "dev");
+        assert_eq!(res["result"]["ssh_alias"], "dev-server");
+        assert_eq!(res["result"]["local_socket_path"], "/tmp/portsage-dev.sock");
+    }
+
+    #[tokio::test]
+    async fn get_remote_backend_returns_null_when_missing() {
+        let db = fresh_db();
+        let res = req(
+            &db,
+            r#"{"method":"get_remote_backend","params":{"name":"ghost"}}"#,
+        )
+        .await;
+        assert!(res["result"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_remote_backend_missing_param() {
+        let db = fresh_db();
+        let res = req(&db, r#"{"method":"get_remote_backend","params":{}}"#).await;
         assert!(res["error"].as_str().unwrap().contains("missing"));
     }
 
@@ -746,12 +884,16 @@ mod tests {
             assert_eq!(all[0].ports.len(), 1);
 
             // 4. next_range -> RangeBounds
-            let next = client.next_range().map_err(|e| format!("next_range: {e}"))?;
+            let next = client
+                .next_range()
+                .map_err(|e| format!("next_range: {e}"))?;
             assert_eq!(next.range_start, 4010);
             assert_eq!(next.range_end, 4019);
 
             // 5. get_config -> ConfigSnapshot
-            let cfg = client.get_config().map_err(|e| format!("get_config: {e}"))?;
+            let cfg = client
+                .get_config()
+                .map_err(|e| format!("get_config: {e}"))?;
             assert_eq!(cfg.base_port, "4000");
             assert_eq!(cfg.range_size, "10");
 
@@ -789,7 +931,11 @@ mod tests {
     async fn full_workflow_reserve_register_list_release() {
         let db = fresh_db();
 
-        let res = req(&db, r#"{"method":"reserve_range","params":{"name":"myapp","path":"/tmp/myapp"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"reserve_range","params":{"name":"myapp","path":"/tmp/myapp"}}"#,
+        )
+        .await;
         assert_eq!(res["result"]["name"], "myapp");
 
         req(
@@ -806,7 +952,11 @@ mod tests {
         assert_eq!(projects[0]["ports"].as_array().unwrap().len(), 2);
         assert_eq!(projects[0]["path"], "/tmp/myapp");
 
-        let res = req(&db, r#"{"method":"release_project","params":{"name":"myapp"}}"#).await;
+        let res = req(
+            &db,
+            r#"{"method":"release_project","params":{"name":"myapp"}}"#,
+        )
+        .await;
         assert_eq!(res["result"], "ok");
 
         let res = req(&db, r#"{"method":"list_all"}"#).await;

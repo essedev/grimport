@@ -3,9 +3,7 @@ pub mod output;
 
 use crate::cli::{Cli, Command, ConfigAction, GlobalOpts};
 use crate::output::OutputMode;
-use portsage_client::{
-    AutoSpawn, Client, ClientError, PortStatus,
-};
+use portsage_client::{AutoSpawn, Client, ClientError, PortStatus};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -16,6 +14,7 @@ pub enum CliError {
     NoTargetSpecified(&'static str),
     AbortedByUser,
     ServiceNotInProject(String, String),
+    UnknownBackend(String),
     Io(std::io::Error),
 }
 
@@ -40,6 +39,7 @@ impl CliError {
             CliError::Client(_) => 1,
             CliError::NoProjectAtCwd(_) => 4,
             CliError::ServiceNotInProject(_, _) => 4,
+            CliError::UnknownBackend(_) => 4,
             CliError::NoTargetSpecified(_) => 2,
             CliError::AbortedByUser => 1,
             CliError::Io(_) => 1,
@@ -58,6 +58,9 @@ impl CliError {
             CliError::ServiceNotInProject(svc, name) => {
                 format!("service {svc} is not registered in project {name}")
             }
+            CliError::UnknownBackend(name) => format!(
+                "remote backend '{name}' is not configured. Add it via the Portsage app (Settings > Remote backends) first.",
+            ),
             CliError::NoTargetSpecified(what) => {
                 format!("must specify {what} or pass --here")
             }
@@ -82,7 +85,7 @@ pub fn server_error_code(msg: &str) -> u8 {
     }
 }
 
-pub fn make_client(opts: &GlobalOpts) -> Client {
+pub fn make_client(opts: &GlobalOpts) -> Result<Client, CliError> {
     let socket_path = opts
         .socket
         .clone()
@@ -94,7 +97,21 @@ pub fn make_client(opts: &GlobalOpts) -> Client {
             app_path: opts.app.clone(),
         }
     };
-    Client::new(socket_path).with_autospawn(autospawn)
+
+    let Some(backend_name) = opts.backend.as_deref() else {
+        return Ok(Client::new(socket_path).with_autospawn(autospawn));
+    };
+
+    // `--backend <name>`: ask the local Portsage app for the forwarded socket
+    // path of that backend, then point a fresh Client at it. Autospawn on the
+    // tunneled socket is meaningless (we can't autospawn an SSH tunnel) so we
+    // drop it on the final client; if the tunnel is down, the caller gets
+    // `AppNotRunning` and we surface a hint pointing back at the UI.
+    let lookup = Client::new(socket_path).with_autospawn(autospawn);
+    let backend = lookup
+        .get_remote_backend(backend_name)?
+        .ok_or_else(|| CliError::UnknownBackend(backend_name.to_string()))?;
+    Ok(Client::new(PathBuf::from(backend.local_socket_path)))
 }
 
 fn pwd() -> PathBuf {
@@ -132,9 +149,7 @@ fn confirm(prompt: &str, yes: bool) -> Result<(), CliError> {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        output::print_error(
-            "destructive command requires --yes when stdin is not a terminal",
-        )?;
+        output::print_error("destructive command requires --yes when stdin is not a terminal")?;
         return Err(CliError::AbortedByUser);
     }
     use std::io::Write;
@@ -254,8 +269,7 @@ fn cmd_release(
     here: bool,
     yes: bool,
 ) -> Result<(), CliError> {
-    let name =
-        resolve_project_name(client, name, here, "a project name (or use --here)")?;
+    let name = resolve_project_name(client, name, here, "a project name (or use --here)")?;
     confirm(&format!("release project {name} and all its ports?"), yes)?;
     client.release_project(&name)?;
     output::print_message(mode, &format!("released {name}"))?;
@@ -286,9 +300,11 @@ fn cmd_kill_project(
     here: bool,
     yes: bool,
 ) -> Result<(), CliError> {
-    let name =
-        resolve_project_name(client, name, here, "a project name (or use --here)")?;
-    confirm(&format!("kill all active processes in project {name}?"), yes)?;
+    let name = resolve_project_name(client, name, here, "a project name (or use --here)")?;
+    confirm(
+        &format!("kill all active processes in project {name}?"),
+        yes,
+    )?;
     let entries = client.kill_project(&name)?;
     output::print_kill_entries(mode, &entries)?;
     Ok(())
@@ -327,16 +343,15 @@ fn cmd_open(
     client.open_in_browser(port_row.port)?;
     output::print_message(
         mode,
-        &format!("opened http://localhost:{} ({})", port_row.port, port_row.service),
+        &format!(
+            "opened http://localhost:{} ({})",
+            port_row.port, port_row.service
+        ),
     )?;
     Ok(())
 }
 
-fn cmd_config(
-    client: &Client,
-    mode: OutputMode,
-    action: ConfigAction,
-) -> Result<(), CliError> {
+fn cmd_config(client: &Client, mode: OutputMode, action: ConfigAction) -> Result<(), CliError> {
     match action {
         ConfigAction::Get => {
             let cfg = client.get_config()?;
@@ -354,12 +369,15 @@ fn cmd_config(
 
 fn cmd_doctor(opts: &GlobalOpts, mode: OutputMode) -> Result<(), CliError> {
     use std::io::Write;
-    let socket_path = opts
-        .socket
-        .clone()
-        .unwrap_or_else(portsage_client::default_socket_path);
+    let client = make_client(opts)?;
+    let socket_path = client.socket_path().to_path_buf();
     let mut out = anstream::stdout().lock();
     if !matches!(mode, OutputMode::Json) {
+        if let Some(name) = opts.backend.as_deref() {
+            writeln!(out, "backend: {name} (remote)")?;
+        } else {
+            writeln!(out, "backend: local")?;
+        }
         writeln!(out, "socket: {}", socket_path.display())?;
         writeln!(
             out,
@@ -368,7 +386,7 @@ fn cmd_doctor(opts: &GlobalOpts, mode: OutputMode) -> Result<(), CliError> {
         )?;
     }
 
-    let probe = Client::new(socket_path.clone())
+    let probe = client
         .with_read_timeout(std::time::Duration::from_millis(500))
         .list_all();
     let reachable = probe.is_ok();
@@ -400,26 +418,37 @@ fn cmd_doctor(opts: &GlobalOpts, mode: OutputMode) -> Result<(), CliError> {
 
 pub fn run(cli: Cli) -> Result<(), CliError> {
     let mode = OutputMode::from_flags(cli.global.json, cli.global.quiet);
-    let client = make_client(&cli.global);
+    let client = make_client(&cli.global)?;
 
     let yes = cli.global.yes;
     match cli.command {
-        Command::List { here, project, active } => cmd_list(&client, mode, here, project, active),
+        Command::List {
+            here,
+            project,
+            active,
+        } => cmd_list(&client, mode, here, project, active),
         Command::Status => cmd_status(&client, mode),
         Command::Reserve { name, path, here } => cmd_reserve(&client, mode, name, path, here),
-        Command::Register { service, port, project, here } => {
-            cmd_register(&client, mode, service, port, project, here)
-        }
-        Command::Remove { service, project, here } => {
-            cmd_remove(&client, mode, service, project, here)
-        }
+        Command::Register {
+            service,
+            port,
+            project,
+            here,
+        } => cmd_register(&client, mode, service, port, project, here),
+        Command::Remove {
+            service,
+            project,
+            here,
+        } => cmd_remove(&client, mode, service, project, here),
         Command::Release { name, here } => cmd_release(&client, mode, name, here, yes),
         Command::Scan { unmanaged } => cmd_scan(&client, mode, unmanaged),
         Command::Kill { port } => cmd_kill(&client, mode, port, yes),
-        Command::KillProject { name, here } => {
-            cmd_kill_project(&client, mode, name, here, yes)
-        }
-        Command::Open { target, project, here } => cmd_open(&client, mode, target, project, here),
+        Command::KillProject { name, here } => cmd_kill_project(&client, mode, name, here, yes),
+        Command::Open {
+            target,
+            project,
+            here,
+        } => cmd_open(&client, mode, target, project, here),
         Command::Config { action } => cmd_config(&client, mode, action),
         Command::Doctor => cmd_doctor(&cli.global, mode),
     }
@@ -437,8 +466,14 @@ mod tests {
 
     #[test]
     fn server_error_code_maps_constraint_to_5() {
-        assert_eq!(server_error_code("port 9999 is outside project range 4000-4009"), 5);
-        assert_eq!(server_error_code("UNIQUE constraint failed: projects.name"), 5);
+        assert_eq!(
+            server_error_code("port 9999 is outside project range 4000-4009"),
+            5
+        );
+        assert_eq!(
+            server_error_code("UNIQUE constraint failed: projects.name"),
+            5
+        );
         assert_eq!(server_error_code("duplicate value"), 5);
     }
 
@@ -465,15 +500,30 @@ mod tests {
         );
         assert_eq!(CliError::AbortedByUser.exit_code(), 1);
         assert_eq!(CliError::NoTargetSpecified("foo").exit_code(), 2);
-        assert_eq!(CliError::NoProjectAtCwd(PathBuf::from("/tmp")).exit_code(), 4);
+        assert_eq!(
+            CliError::NoProjectAtCwd(PathBuf::from("/tmp")).exit_code(),
+            4
+        );
     }
 
     #[test]
     fn output_mode_picks_json_first_then_quiet() {
-        assert!(matches!(OutputMode::from_flags(true, false), OutputMode::Json));
-        assert!(matches!(OutputMode::from_flags(false, true), OutputMode::Quiet));
-        assert!(matches!(OutputMode::from_flags(true, true), OutputMode::Json));
-        assert!(matches!(OutputMode::from_flags(false, false), OutputMode::Human));
+        assert!(matches!(
+            OutputMode::from_flags(true, false),
+            OutputMode::Json
+        ));
+        assert!(matches!(
+            OutputMode::from_flags(false, true),
+            OutputMode::Quiet
+        ));
+        assert!(matches!(
+            OutputMode::from_flags(true, true),
+            OutputMode::Json
+        ));
+        assert!(matches!(
+            OutputMode::from_flags(false, false),
+            OutputMode::Human
+        ));
     }
 
     // End-to-end: spin up a minimal mock socket server in a thread, point the
@@ -510,6 +560,7 @@ mod tests {
             no_autospawn: true,
             app: None,
             socket: Some(path),
+            backend: None,
             yes: false,
         }
     }

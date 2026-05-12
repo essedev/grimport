@@ -1,0 +1,37 @@
+[Unit]
+Description=Portsage port allocation server
+Documentation=https://github.com/essedev/portsage
+After=network.target
+
+[Service]
+Type=simple
+User=portsage
+Group=portsage
+ExecStart=/usr/local/bin/portsage-server --socket /run/portsage/portsage.sock
+Restart=on-failure
+RestartSec=2
+
+# systemd manages the socket parent dir for us: created on start, deleted on
+# stop. Mode 0750 lets members of the `portsage` group connect; install.sh
+# adds the human user to that group.
+RuntimeDirectory=portsage
+RuntimeDirectoryMode=0750
+
+# Persistent state: the SQLite database. Lives at /var/lib/portsage/.
+StateDirectory=portsage
+StateDirectoryMode=0750
+Environment=XDG_DATA_HOME=/var/lib
+
+# Defense in depth: drop privileges we never use. NoNewPrivileges blocks
+# any setuid escalation, ProtectSystem makes /usr read-only, etc.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+ReadWritePaths=/run/portsage /var/lib/portsage
+
+[Install]
+WantedBy=multi-user.target

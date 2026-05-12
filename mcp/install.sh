@@ -18,7 +18,19 @@ if ! command -v uv &>/dev/null; then
 fi
 
 if ! command -v jq &>/dev/null; then
-    echo "Error: jq is not installed. Install it: brew install jq"
+    case "$(uname -s)" in
+        Darwin)
+            echo "Error: jq is not installed. Install it: brew install jq"
+            ;;
+        Linux)
+            echo "Error: jq is not installed. Install it via your package manager,"
+            echo "  e.g. apt: sudo apt install jq"
+            echo "       rpm: sudo dnf install jq"
+            ;;
+        *)
+            echo "Error: jq is not installed. Install it via your package manager."
+            ;;
+    esac
     exit 1
 fi
 

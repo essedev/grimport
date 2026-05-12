@@ -12,27 +12,58 @@ pub use client::{
 };
 pub use types::{
     ActivePort, ConfigSnapshot, KillEntry, KillOutcome, PortStatus, ProjectStatus, RangeBounds,
+    RemoteBackend,
 };
 
 use std::path::PathBuf;
 
 /// Default location of the Portsage Unix socket, matching what the Rust
-/// backend creates via `dirs::config_dir()` (~/Library/Application Support
-/// on macOS, ~/.config on Linux, %APPDATA% on Windows).
+/// backend creates.
+///
+/// Precedence:
+///   1. `PORTSAGE_SOCKET` env var (used for the system-wide systemd socket
+///      at `/run/portsage/portsage.sock` and any custom setup).
+///   2. macOS: `~/Library/Application Support/portsage/portsage.sock`.
+///   3. Linux: `$XDG_RUNTIME_DIR/portsage/portsage.sock`, falling back to
+///      `/tmp/portsage-<uid>.sock` (uid via `$UID`, or `portsage.sock` if
+///      unknown) when the runtime dir is unset.
+///   4. Windows: `%APPDATA%/portsage/portsage.sock`.
+///
+/// `dirs` is a heavy dep for this single use; the lookup is reimplemented
+/// inline so the client crate stays minimal.
 pub fn default_socket_path() -> PathBuf {
-    // dirs is a heavy dep for this single use; reimplement the lookup with
-    // env vars so the client crate stays minimal.
-    let base = if cfg!(target_os = "macos") {
-        std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
-    } else if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-    };
-    base.unwrap_or_else(|| PathBuf::from("."))
-        .join("portsage")
-        .join("portsage.sock")
+    if let Some(p) = std::env::var_os("PORTSAGE_SOCKET") {
+        return PathBuf::from(p);
+    }
+
+    if cfg!(target_os = "macos") {
+        let base = std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"));
+        return base
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("portsage")
+            .join("portsage.sock");
+    }
+
+    if cfg!(target_os = "windows") {
+        let base = std::env::var_os("APPDATA").map(PathBuf::from);
+        return base
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("portsage")
+            .join("portsage.sock");
+    }
+
+    // Linux and other unix: prefer XDG_RUNTIME_DIR (the systemd-user default),
+    // fall back to /tmp keyed by uid so two users on the same box can each run
+    // their own Portsage.
+    if let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(rt).join("portsage").join("portsage.sock");
+    }
+    let uid = std::env::var("UID")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+    match uid {
+        Some(u) => PathBuf::from(format!("/tmp/portsage-{}.sock", u)),
+        None => PathBuf::from("/tmp/portsage.sock"),
+    }
 }

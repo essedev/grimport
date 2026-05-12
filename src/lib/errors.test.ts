@@ -94,6 +94,46 @@ describe("humanizeError", () => {
     });
   });
 
+  describe("remote backend / SSH errors", () => {
+    it("translates unknown remote backend", () => {
+      expect(humanizeError("unknown remote backend: dev")).toBe(
+        'Remote backend "dev" is not configured. Open Settings > Remote backends to add it.',
+      );
+    });
+
+    it("translates Could not resolve hostname (Tailscale down, typo in alias)", () => {
+      expect(
+        humanizeError(
+          "ssh: Could not resolve hostname dev-server: nodename nor servname provided",
+        ),
+      ).toContain("SSH could not resolve");
+    });
+
+    it("translates Host key verification failed", () => {
+      expect(humanizeError("Host key verification failed.")).toContain(
+        "host key verification",
+      );
+    });
+
+    it("translates Permission denied (publickey)", () => {
+      expect(humanizeError("Permission denied (publickey).")).toContain(
+        "SSH key authentication",
+      );
+    });
+
+    it("translates tunnel timeout and preserves the backend name", () => {
+      expect(
+        humanizeError("tunnel for 'dev' did not become reachable within 5s"),
+      ).toContain('"dev"');
+    });
+
+    it("translates backend closed connection (remote server not running)", () => {
+      expect(humanizeError("could not parse backend response: backend closed connection")).toContain(
+        "remote portsage-server may not be running",
+      );
+    });
+  });
+
   describe("fallback behavior", () => {
     it("returns the raw text for unmapped errors instead of swallowing them", () => {
       const raw = "some completely unexpected error from the future";

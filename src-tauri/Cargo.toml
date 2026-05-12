@@ -3,28 +3,50 @@ name = "portsage"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Port allocation manager for macOS"
+description = "Port allocation manager (macOS GUI + headless server)"
 
 [lib]
 name = "portsage_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The `gui` feature compiles the Tauri menubar app. Disabling it (the path used
+# by the Linux server build) drops the Tauri toolchain, the GTK/webkit2gtk
+# system dependencies, and `tauri-plugin-*` entirely - the result is a pure
+# headless binary that only serves the Unix socket.
+[features]
+default = ["gui"]
+gui = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-single-instance",
+    "dep:zip",
+]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-autostart = { version = "2", features = [] }
-tauri-plugin-single-instance = "2"
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", features = [], optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.34", features = ["bundled"] }
 dirs = "6"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "signal"] }
 portsage-client = { path = "../crates/portsage-client" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dependencies.thiserror]
+version = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
     bin_name = "portsage",
     about = "Manage port allocation across development projects",
     version,
-    propagate_version = true,
+    propagate_version = true
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -37,6 +37,14 @@ pub struct GlobalOpts {
     /// Override the Unix socket path (mainly for tests).
     #[arg(long, global = true, env = "PORTSAGE_SOCKET")]
     pub socket: Option<std::path::PathBuf>,
+
+    /// Target a configured remote backend by name (Mac only). The CLI looks
+    /// up the backend's local-side forwarded socket via the local Portsage
+    /// app and connects to that path. Requires the Portsage app to be
+    /// running with the tunnel open (use the Settings UI to add and Test the
+    /// backend first).
+    #[arg(long, global = true, env = "PORTSAGE_BACKEND")]
+    pub backend: Option<String>,
 
     /// Skip the confirmation prompt on destructive commands (`release`, `kill`,
     /// `kill-project`). Global so it works in either position:
@@ -115,9 +123,7 @@ pub enum Command {
     },
 
     /// Kill the process listening on a port (SIGTERM, grace, SIGKILL).
-    Kill {
-        port: i64,
-    },
+    Kill { port: i64 },
 
     /// Kill every active port registered to a project, in parallel.
     KillProject {

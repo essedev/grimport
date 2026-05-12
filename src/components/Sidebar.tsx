@@ -7,12 +7,19 @@ import { UIBadge } from "@/components/ui/UIBadge";
 import { UIStatus } from "@/components/ui/UIStatus";
 import { UIDivider } from "@/components/ui/UIDivider";
 import { AddProjectForm } from "@/components/AddProjectForm";
+import { BackendSwitcher } from "@/components/BackendSwitcher";
 import * as cmd from "@/lib/commands";
-import type { ProjectStatus, UnmanagedPort } from "@/lib/types";
+import type {
+  BackendTarget,
+  ProjectStatus,
+  RemoteBackend,
+  TunnelState,
+  UnmanagedPort,
+} from "@/lib/types";
 
 type View = "project" | "unmanaged" | "settings";
 
-type SettingsTab = "general" | "integrations" | "data";
+type SettingsTab = "general" | "integrations" | "data" | "backends";
 
 interface SidebarProps {
   projects: ProjectStatus[];
@@ -23,6 +30,10 @@ interface SidebarProps {
   onCreate: (name: string, path?: string) => void;
   onShowSettings: (tab?: SettingsTab) => void;
   onShowUnmanaged: () => void;
+  backendTarget: BackendTarget | null;
+  remoteBackends: RemoteBackend[];
+  tunnels: Record<string, TunnelState>;
+  onSelectBackend: (target: BackendTarget) => void;
 }
 
 export function Sidebar({
@@ -34,6 +45,10 @@ export function Sidebar({
   onCreate,
   onShowSettings,
   onShowUnmanaged,
+  backendTarget,
+  remoteBackends,
+  tunnels,
+  onSelectBackend,
 }: SidebarProps) {
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -55,6 +70,13 @@ export function Sidebar({
       "
     >
       <div className="p-[var(--spacing-3)] flex flex-col gap-[var(--spacing-2)]">
+        <BackendSwitcher
+          target={backendTarget}
+          remotes={remoteBackends}
+          tunnels={tunnels}
+          onSelectTarget={onSelectBackend}
+          onAddBackend={() => onShowSettings("backends")}
+        />
         <UISearch
           value={search}
           onChange={(e) => setSearch(e.target.value)}

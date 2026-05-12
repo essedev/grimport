@@ -5,7 +5,7 @@
 //! out of a single source of truth.
 
 use crate::db::{Database, ProjectWithPorts};
-use crate::scanner::{self, scan_active_ports, ActivePort};
+use crate::scanner::{self, ActivePort};
 use std::collections::HashSet;
 
 // Wire types live in portsage-client so the CLI and the app speak the same
@@ -21,10 +21,7 @@ pub fn enrich_with_status(
     active_ports: &[ActivePort],
 ) -> Vec<ProjectStatus> {
     use std::collections::HashMap;
-    let port_map: HashMap<i64, &ActivePort> = active_ports
-        .iter()
-        .map(|ap| (ap.port, ap))
-        .collect();
+    let port_map: HashMap<i64, &ActivePort> = active_ports.iter().map(|ap| (ap.port, ap)).collect();
 
     projects
         .into_iter()
@@ -76,12 +73,6 @@ pub fn list_unmanaged(db: &Database) -> Result<Vec<ActivePort>, String> {
 pub fn scan_active_detailed() -> Vec<ActivePort> {
     let mut ports = scanner::scan_active_ports_detailed();
     ports.sort_by_key(|p| p.port);
-    ports
-}
-
-pub fn scan_active_port_numbers() -> Vec<i64> {
-    let mut ports: Vec<i64> = scan_active_ports().into_iter().collect();
-    ports.sort();
     ports
 }
 
@@ -265,7 +256,18 @@ pub fn open_in_browser(port: i64) -> Result<(), String> {
         return Err(format!("invalid port: {port}"));
     }
     let url = format!("http://localhost:{port}");
-    std::process::Command::new("open")
+    let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("open", &[])
+    } else if cfg!(target_os = "windows") {
+        ("cmd", &["/C", "start", ""])
+    } else {
+        // Linux + other unix - rely on freedesktop.org's xdg-open. On a
+        // headless server this still spawns successfully but the URL goes
+        // nowhere; that's the caller's responsibility to avoid.
+        ("xdg-open", &[])
+    };
+    std::process::Command::new(cmd)
+        .args(args)
         .arg(&url)
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -387,7 +389,9 @@ mod tests {
 
     #[test]
     fn is_permission_error_matches_macos_and_linux_phrasing() {
-        assert!(is_permission_error("kill: (12345) - Operation not permitted"));
+        assert!(is_permission_error(
+            "kill: (12345) - Operation not permitted"
+        ));
         assert!(is_permission_error("kill: 12345: Operation not permitted"));
         assert!(is_permission_error("OPERATION NOT PERMITTED"));
     }
@@ -489,14 +493,18 @@ mod tests {
         let db = Database::in_memory().unwrap();
         db.create_project("alpha", Some(&project_path)).unwrap();
         let found = find_project_by_path(&db, &nested_str).unwrap();
-        assert!(found.is_some(), "descendant should resolve to ancestor project");
+        assert!(
+            found.is_some(),
+            "descendant should resolve to ancestor project"
+        );
         assert_eq!(found.unwrap().name, "alpha");
     }
 
     #[test]
     fn find_project_by_path_no_match_returns_none() {
         let db = Database::in_memory().unwrap();
-        db.create_project("alpha", Some("/tmp/somewhere/else")).unwrap();
+        db.create_project("alpha", Some("/tmp/somewhere/else"))
+            .unwrap();
         let found = find_project_by_path(&db, "/var/log").unwrap();
         assert!(found.is_none());
     }

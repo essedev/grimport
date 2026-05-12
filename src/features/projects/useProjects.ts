@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { ProjectStatus, UnmanagedPort, KillOutcome } from "@/lib/types";
 import * as cmd from "@/lib/commands";
+import type { KillEntry } from "@/lib/commands";
 import { humanizeError } from "@/lib/errors";
 import { useToast } from "@/lib/toast";
 
@@ -73,7 +74,7 @@ export function useProjects() {
 
   const killProject = async (
     projectId: number,
-  ): Promise<Array<[number, KillOutcome]> | null> => {
+  ): Promise<KillEntry[] | null> => {
     try {
       const result = await cmd.killProject(projectId);
       await refresh();

@@ -1,7 +1,9 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
+
+use crate::paths;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
@@ -27,6 +29,24 @@ pub struct ProjectWithPorts {
     #[serde(flatten)]
     pub project: Project,
     pub ports: Vec<Port>,
+}
+
+// The on-disk and wire shape are identical, so re-export the canonical wire
+// type from portsage-client instead of duplicating it. The Mac stores one
+// row per remote (e.g. "dev", "staging"); the SSH config and tunnel state
+// live elsewhere - this is just the catalogue.
+pub use portsage_client::RemoteBackend;
+
+/// Fields a caller supplies when creating or updating a remote backend.
+/// Wrapping the inputs keeps the CRUD method signatures readable when more
+/// optional fields are added later.
+#[derive(Debug, Clone)]
+pub struct RemoteBackendInput<'a> {
+    pub name: &'a str,
+    pub ssh_alias: &'a str,
+    pub remote_socket_path: &'a str,
+    pub local_socket_path: &'a str,
+    pub auto_forward_enabled: bool,
 }
 
 pub struct Database {
@@ -66,14 +86,13 @@ impl Database {
     /// lets the app keep running instead of cascading the panic to every
     /// future DB caller.
     fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(crate) fn db_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("portsage")
-            .join("portsage.db")
+        paths::db_path()
     }
 
     fn migrate(&self) -> Result<()> {
@@ -102,7 +121,21 @@ impl Database {
             );
 
             INSERT OR IGNORE INTO config (key, value) VALUES ('base_port', '4000');
-            INSERT OR IGNORE INTO config (key, value) VALUES ('range_size', '10');",
+            INSERT OR IGNORE INTO config (key, value) VALUES ('range_size', '10');
+
+            -- Phase 2 of the multi-host evolution: catalogue of remote
+            -- backends the Mac UI knows about. This table is meaningful only
+            -- on the Mac; on a Linux server it stays empty (the server is
+            -- itself a remote backend, not a consumer of remotes).
+            CREATE TABLE IF NOT EXISTS remote_backends (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                ssh_alias TEXT NOT NULL,
+                remote_socket_path TEXT NOT NULL,
+                local_socket_path TEXT NOT NULL,
+                auto_forward_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
         )?;
         Ok(())
     }
@@ -155,12 +188,8 @@ impl Database {
             .parse()
             .unwrap_or(10);
 
-        let max_end: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(range_end) FROM projects",
-                [],
-                |row| row.get(0),
-            )?;
+        let max_end: Option<i64> =
+            conn.query_row("SELECT MAX(range_end) FROM projects", [], |row| row.get(0))?;
 
         let start = match max_end {
             Some(end) => end + 1,
@@ -169,11 +198,7 @@ impl Database {
         Ok((start, start + range_size - 1))
     }
 
-    pub fn create_project(
-        &self,
-        name: &str,
-        path: Option<&str>,
-    ) -> Result<Project> {
+    pub fn create_project(&self, name: &str, path: Option<&str>) -> Result<Project> {
         let conn = self.conn();
         let (range_start, range_end) = Self::compute_next_range(&conn)?;
         conn.execute(
@@ -247,12 +272,7 @@ impl Database {
         Ok(result)
     }
 
-    pub fn add_port(
-        &self,
-        project_id: i64,
-        service: &str,
-        port: i64,
-    ) -> Result<Port> {
+    pub fn add_port(&self, project_id: i64, service: &str, port: i64) -> Result<Port> {
         let conn = self.conn();
         // Validate the port is within the project's reserved range.
         let (range_start, range_end): (i64, i64) = conn.query_row(
@@ -298,6 +318,149 @@ impl Database {
         conn.execute("DELETE FROM ports WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    // --- remote_backends ---
+
+    pub fn create_remote_backend(&self, input: RemoteBackendInput<'_>) -> Result<RemoteBackend> {
+        validate_remote_backend_input(&input)?;
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO remote_backends \
+             (name, ssh_alias, remote_socket_path, local_socket_path, auto_forward_enabled) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                input.name,
+                input.ssh_alias,
+                input.remote_socket_path,
+                input.local_socket_path,
+                input.auto_forward_enabled as i64,
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        Self::fetch_remote_backend(&conn, id)
+    }
+
+    pub fn list_remote_backends(&self) -> Result<Vec<RemoteBackend>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, ssh_alias, remote_socket_path, local_socket_path, \
+                    auto_forward_enabled, created_at \
+             FROM remote_backends ORDER BY name",
+        )?;
+        let rows: Vec<RemoteBackend> = stmt
+            .query_map([], row_to_remote_backend)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_remote_backend_by_name(&self, name: &str) -> Result<Option<RemoteBackend>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, ssh_alias, remote_socket_path, local_socket_path, \
+                    auto_forward_enabled, created_at \
+             FROM remote_backends WHERE name = ?1",
+        )?;
+        let mut rows = stmt.query(params![name])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row_to_remote_backend(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn update_remote_backend(
+        &self,
+        id: i64,
+        input: RemoteBackendInput<'_>,
+    ) -> Result<RemoteBackend> {
+        validate_remote_backend_input(&input)?;
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE remote_backends SET \
+                name = ?1, ssh_alias = ?2, remote_socket_path = ?3, \
+                local_socket_path = ?4, auto_forward_enabled = ?5 \
+             WHERE id = ?6",
+            params![
+                input.name,
+                input.ssh_alias,
+                input.remote_socket_path,
+                input.local_socket_path,
+                input.auto_forward_enabled as i64,
+                id,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_NOTFOUND),
+                Some(format!("remote backend {id} not found")),
+            ));
+        }
+        Self::fetch_remote_backend(&conn, id)
+    }
+
+    pub fn set_remote_backend_auto_forward(&self, id: i64, enabled: bool) -> Result<()> {
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE remote_backends SET auto_forward_enabled = ?1 WHERE id = ?2",
+            params![enabled as i64, id],
+        )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_NOTFOUND),
+                Some(format!("remote backend {id} not found")),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn delete_remote_backend(&self, id: i64) -> Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM remote_backends WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    fn fetch_remote_backend(conn: &Connection, id: i64) -> Result<RemoteBackend> {
+        conn.query_row(
+            "SELECT id, name, ssh_alias, remote_socket_path, local_socket_path, \
+                    auto_forward_enabled, created_at \
+             FROM remote_backends WHERE id = ?1",
+            params![id],
+            row_to_remote_backend,
+        )
+    }
+}
+
+fn validate_remote_backend_input(input: &RemoteBackendInput<'_>) -> Result<()> {
+    fn fail(msg: &str) -> Result<()> {
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            Some(msg.to_string()),
+        ))
+    }
+    if input.name.trim().is_empty() {
+        return fail("name is required");
+    }
+    if input.ssh_alias.trim().is_empty() {
+        return fail("ssh_alias is required");
+    }
+    if input.remote_socket_path.trim().is_empty() {
+        return fail("remote_socket_path is required");
+    }
+    if input.local_socket_path.trim().is_empty() {
+        return fail("local_socket_path is required");
+    }
+    Ok(())
+}
+
+fn row_to_remote_backend(row: &rusqlite::Row<'_>) -> Result<RemoteBackend> {
+    Ok(RemoteBackend {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        ssh_alias: row.get(2)?,
+        remote_socket_path: row.get(3)?,
+        local_socket_path: row.get(4)?,
+        auto_forward_enabled: row.get::<_, i64>(5)? != 0,
+        created_at: row.get(6)?,
+    })
 }
 
 #[cfg(test)]
@@ -468,8 +631,7 @@ mod tests {
             }));
         }
 
-        let mut projects: Vec<Project> =
-            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let mut projects: Vec<Project> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         projects.sort_by_key(|p| p.range_start);
 
         // All starts must be unique.
@@ -502,5 +664,140 @@ mod tests {
             projects.last().unwrap().range_end,
             4000 + (THREADS as i64) * 10 - 1,
         );
+    }
+
+    // --- remote_backends CRUD ---
+
+    fn input<'a>(name: &'a str, alias: &'a str) -> RemoteBackendInput<'a> {
+        RemoteBackendInput {
+            name,
+            ssh_alias: alias,
+            remote_socket_path: "/run/portsage/portsage.sock",
+            local_socket_path: "/tmp/portsage-dev.sock",
+            auto_forward_enabled: false,
+        }
+    }
+
+    #[test]
+    fn remote_backend_round_trip() {
+        let db = fresh_db();
+        let created = db
+            .create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        assert!(created.id > 0);
+        assert_eq!(created.name, "dev");
+        assert_eq!(created.ssh_alias, "dev-server");
+        assert_eq!(created.remote_socket_path, "/run/portsage/portsage.sock");
+        assert_eq!(created.local_socket_path, "/tmp/portsage-dev.sock");
+        assert!(!created.auto_forward_enabled);
+        assert!(!created.created_at.is_empty());
+
+        let found = db
+            .get_remote_backend_by_name("dev")
+            .unwrap()
+            .expect("backend should exist");
+        assert_eq!(found, created);
+    }
+
+    #[test]
+    fn remote_backend_list_orders_by_name() {
+        let db = fresh_db();
+        db.create_remote_backend(input("staging", "stage")).unwrap();
+        db.create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        let all = db.list_remote_backends().unwrap();
+        let names: Vec<_> = all.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["dev", "staging"]);
+    }
+
+    #[test]
+    fn remote_backend_duplicate_name_fails() {
+        let db = fresh_db();
+        db.create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        let err = db.create_remote_backend(input("dev", "other-server"));
+        assert!(err.is_err(), "second insert with same name should fail");
+    }
+
+    #[test]
+    fn remote_backend_empty_name_rejected_before_db() {
+        // Defends against the frontend posting blank values. The DB has NOT NULL
+        // but allows empty strings; we want a clear error at insert time.
+        let db = fresh_db();
+        let bad = RemoteBackendInput {
+            name: "  ",
+            ssh_alias: "x",
+            remote_socket_path: "/x",
+            local_socket_path: "/y",
+            auto_forward_enabled: false,
+        };
+        let err = db.create_remote_backend(bad).unwrap_err().to_string();
+        assert!(err.contains("name is required"), "got: {err}");
+    }
+
+    #[test]
+    fn remote_backend_update_changes_fields() {
+        let db = fresh_db();
+        let created = db
+            .create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        let updated = db
+            .update_remote_backend(
+                created.id,
+                RemoteBackendInput {
+                    name: "dev",
+                    ssh_alias: "dev2",
+                    remote_socket_path: "/run/portsage/v2.sock",
+                    local_socket_path: "/tmp/portsage-dev.sock",
+                    auto_forward_enabled: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.ssh_alias, "dev2");
+        assert_eq!(updated.remote_socket_path, "/run/portsage/v2.sock");
+        assert!(updated.auto_forward_enabled);
+        // created_at preserved across updates.
+        assert_eq!(updated.created_at, created.created_at);
+    }
+
+    #[test]
+    fn remote_backend_update_unknown_id_errors() {
+        let db = fresh_db();
+        let err = db
+            .update_remote_backend(9999, input("dev", "dev-server"))
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "got: {err}");
+    }
+
+    #[test]
+    fn remote_backend_delete_removes() {
+        let db = fresh_db();
+        let b = db
+            .create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        db.delete_remote_backend(b.id).unwrap();
+        assert!(db.get_remote_backend_by_name("dev").unwrap().is_none());
+    }
+
+    #[test]
+    fn remote_backend_set_auto_forward_toggle() {
+        let db = fresh_db();
+        let b = db
+            .create_remote_backend(input("dev", "dev-server"))
+            .unwrap();
+        assert!(!b.auto_forward_enabled);
+        db.set_remote_backend_auto_forward(b.id, true).unwrap();
+        let after = db.get_remote_backend_by_name("dev").unwrap().unwrap();
+        assert!(after.auto_forward_enabled);
+        db.set_remote_backend_auto_forward(b.id, false).unwrap();
+        let after2 = db.get_remote_backend_by_name("dev").unwrap().unwrap();
+        assert!(!after2.auto_forward_enabled);
+    }
+
+    #[test]
+    fn remote_backend_set_auto_forward_unknown_id_errors() {
+        let db = fresh_db();
+        let err = db.set_remote_backend_auto_forward(9999, true).unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }

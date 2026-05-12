@@ -65,3 +65,18 @@ pub struct ConfigSnapshot {
     pub base_port: String,
     pub range_size: String,
 }
+
+/// A remote-backend catalogue row, returned by `get_remote_backend`. Exists
+/// in the wire types so the CLI can ask the Mac socket for a backend's
+/// `local_socket_path` and then point its own `Client` at that path. The
+/// CLI does not open tunnels itself; that stays with the Mac UI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteBackend {
+    pub id: i64,
+    pub name: String,
+    pub ssh_alias: String,
+    pub remote_socket_path: String,
+    pub local_socket_path: String,
+    pub auto_forward_enabled: bool,
+    pub created_at: String,
+}

@@ -2887,6 +2887,7 @@ name = "portsage"
 version = "0.10.0"
 dependencies = [
  "dirs 6.0.0",
+ "libc",
  "portsage-client",
  "rusqlite",
  "serde",
@@ -2898,6 +2899,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "zip",
 ]

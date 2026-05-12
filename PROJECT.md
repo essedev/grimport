@@ -18,6 +18,8 @@ A macOS app with:
 
 ## Architecture
 
+> **Note**: a major architectural evolution is planned to turn Portsage into a multi-host tool (Linux headless server, remote backends in the macOS UI, SSH auto-forward). The plan is documented in [docs/multi-host-evolution.md](docs/multi-host-evolution.md) and tracked under v0.8 in `ROADMAP.md`. The architecture below describes the current single-host state. Read both together when planning changes.
+
 ### Components
 
 1. **Tauri app** (Tauri v2 + React + Tailwind)

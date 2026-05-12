@@ -42,16 +42,66 @@ const PATTERNS: Pattern[] = [
     match: /No such file or directory|os error 2/i,
     message: "File not found.",
   },
-  {
-    match: /Permission denied|os error 13/i,
-    message: "Permission denied. Check the file permissions and try again.",
-  },
 
   // Socket-layer errors from the MCP path - unlikely from the UI but cheap
   // to cover in case a Tauri command starts surfacing them.
   {
     match: /project '([^']+)' not found/i,
     message: (m) => `Project "${m[1]}" not found.`,
+  },
+
+  // --- Remote backend / SSH tunnel errors (Phase 2) ---
+  //
+  // BackendError values arrive as `to_string()`'d strings in the Tauri
+  // command Err channel. The Rust-side variant tags are stable, so match on
+  // them; the trailing detail is the raw ssh stderr or socket message.
+  //
+  // These patterns are intentionally listed *before* the generic
+  // "Permission denied" filesystem rule below: SSH's "Permission denied
+  // (publickey)" is specific enough that it deserves its own message rather
+  // than being collapsed into the file-permissions wording.
+  {
+    match: /unknown remote backend:\s*(.+)/i,
+    message: (m) =>
+      `Remote backend "${m[1].trim()}" is not configured. Open Settings > Remote backends to add it.`,
+  },
+  {
+    match: /Could not resolve hostname/i,
+    message:
+      "SSH could not resolve the remote host. Check the alias in ~/.ssh/config (Host entry) and that the network is reachable.",
+  },
+  {
+    match: /Host key verification failed/i,
+    message:
+      "SSH host key verification failed. Connect once from a terminal (e.g. `ssh <alias>`) to accept the host key, then retry.",
+  },
+  {
+    match: /Permission denied \(publickey/i,
+    message:
+      "SSH key authentication failed. Check ssh-agent is running and your key is loaded, or add `IdentityFile` to the Host entry.",
+  },
+  {
+    match: /tunnel for '([^']+)' did not become reachable/i,
+    message: (m) =>
+      `Tunnel for "${m[1]}" did not come up in time. Check that the remote portsage-server is running and your SSH config reaches it.`,
+  },
+  {
+    match: /backend closed connection/i,
+    message:
+      "Tunnel is open but the remote side closed the connection. The remote portsage-server may not be running.",
+  },
+  {
+    match: /failed to spawn ssh/i,
+    message:
+      "Could not run the ssh client. Is OpenSSH installed and on PATH?",
+  },
+
+  // Generic file-permission errors. Kept *after* the SSH-specific patterns
+  // so "Permission denied (publickey)" doesn't get collapsed into the
+  // file-permissions wording.
+  {
+    match: /Permission denied|os error 13/i,
+    message: "Permission denied. Check the file permissions and try again.",
   },
 ];
 

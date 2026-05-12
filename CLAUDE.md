@@ -4,6 +4,17 @@
 
 A macOS menubar app for managing port allocation across projects. See PROJECT.md for the architecture, DESIGN.md for the design system, ROADMAP.md for the roadmap.
 
+## Active evolution
+
+A multi-host evolution is in flight (Linux headless server, remote backends in the UI, SSH auto-forward). The detailed plan is in [docs/multi-host-evolution.md](docs/multi-host-evolution.md). The ROADMAP entry is v0.8.
+
+Phase 1 (Linux headless server) and Phase 2 (remote backend in the UI) are code complete; both still need a real-environment smoke test - the unit tests cover behavioural invariants but no CI currently spawns a real Linux portsage-server or a real SSH connection. Phase 3 (auto SSH forwarding for project ports) and Phase 4 (polish) are not yet started.
+
+Read the plan before touching any of these modules - they were designed against it:
+- `scanner.rs`: per-OS implementations under `mod macos` / `mod linux`, selected by `#[cfg(target_os)]`. Wire type `ActivePort` lives in `portsage-client/types.rs`.
+- `backends.rs`: `BackendManager` owns SSH tunnels; `BackendRouter` owns the active target; `BackendClient` is the Local/Remote adapter every Tauri command dispatches through.
+- `db.rs`: `remote_backends` table is additive; the row type re-exports `portsage_client::RemoteBackend` so the wire and on-disk shapes can't drift.
+
 ## Commands
 
 - `pnpm tauri dev` - run the app in dev mode
@@ -45,11 +56,13 @@ src-tauri/
   src/
     main.rs           # entry: dispatches to GUI or --headless mode based on argv
     lib.rs            # Tauri entry point, tray icon, popover logic, run_headless()
-    db.rs             # SQLite setup, migrations, CRUD
+    db.rs             # SQLite setup, migrations, CRUD (projects, ports, remote_backends)
+    paths.rs          # OS-aware path resolution (XDG on Linux, Application Support on macOS)
     actions.rs        # pure logic shared by commands.rs and socket.rs (no Tauri deps)
-    commands.rs       # Thin Tauri wrappers over actions::*
-    scanner.rs        # Port scanner (lsof + ps), unmanaged ports, blocklist
+    commands.rs       # Thin Tauri wrappers over actions::* and backends::*
+    scanner.rs        # Port scanner (macOS lsof + ps, Linux /proc + ss fallback)
     socket.rs         # Unix socket server (async), dispatches the wire protocol
+    backends.rs       # Multi-host: BackendTarget, BackendManager, SshTunnel, BackendRouter, BackendClient (no Tauri deps)
   binaries/           # CLI sidecar staged here by scripts/build-cli.sh (gitignored)
   capabilities/
     default.json      # Plugin permissions (dialog, autostart, opener)
@@ -84,9 +97,12 @@ scripts/
 ### Rust backend
 - All DB access in db.rs, exposed to the frontend via commands.rs and to socket clients via socket.rs
 - Shared logic between Tauri commands and the socket dispatcher lives in actions.rs - no Tauri deps allowed there
-- Port scanning in scanner.rs, do not mix with DB logic
+- Multi-host plumbing (BackendTarget, BackendManager, SshTunnel, BackendRouter, BackendClient) lives in backends.rs - no Tauri deps allowed there either; commands.rs is the only Tauri layer
+- OS-aware paths in paths.rs (XDG on Linux, Application Support on macOS) - never call `dirs::*` outside of this module
+- Port scanning in scanner.rs, do not mix with DB logic. Per-OS implementations under `mod macos` / `mod linux` selected by `#[cfg(target_os)]`
 - Unix socket in socket.rs, handles MCP and CLI requests
 - Database shared via Arc<Database> between Tauri state, the socket server, and the headless runtime
+- Tauri code is feature-gated behind the `gui` feature (default). The Linux server build runs with `--no-default-features` and drops the entire Tauri toolchain
 - Typed errors, no unwrap() in production
 - Wire types (PortStatus, ProjectStatus, ActivePort, KillOutcome, KillEntry, RangeBounds, ConfigSnapshot) are defined in `crates/portsage-client/src/types.rs` and re-exported from actions.rs and scanner.rs - never duplicate them
 

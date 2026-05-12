@@ -1,5 +1,6 @@
 use crate::types::{
     ActivePort, ConfigSnapshot, KillEntry, KillOutcome, PortStatus, ProjectStatus, RangeBounds,
+    RemoteBackend,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -129,8 +130,8 @@ impl Client {
         stream.set_read_timeout(Some(self.read_timeout))?;
         stream.set_write_timeout(Some(self.read_timeout))?;
 
-        let mut payload = serde_json::to_string(&request)
-            .map_err(|e| ClientError::Parse(e.to_string()))?;
+        let mut payload =
+            serde_json::to_string(&request).map_err(|e| ClientError::Parse(e.to_string()))?;
         payload.push('\n');
         stream.write_all(payload.as_bytes())?;
         stream.flush()?;
@@ -261,13 +262,20 @@ impl Client {
         Ok(())
     }
 
-    pub fn find_project_by_path(
-        &self,
-        path: &str,
-    ) -> Result<Option<ProjectStatus>, ClientError> {
+    pub fn find_project_by_path(&self, path: &str) -> Result<Option<ProjectStatus>, ClientError> {
         self.call(json!({
             "method": "find_project_by_path",
             "params": { "path": path },
+        }))
+    }
+
+    /// Look up a remote-backend row by name on the (Mac) socket. Used by the
+    /// CLI's `--backend <name>` flag to discover the local-side forwarded
+    /// socket path without poking the Mac's SQLite file directly.
+    pub fn get_remote_backend(&self, name: &str) -> Result<Option<RemoteBackend>, ClientError> {
+        self.call(json!({
+            "method": "get_remote_backend",
+            "params": { "name": name },
         }))
     }
 }
@@ -313,8 +321,26 @@ fn locate_app_binary(hint: Option<&Path>) -> Option<PathBuf> {
             return Some(sys);
         }
         if let Some(home) = std::env::var_os("HOME") {
-            let user = PathBuf::from(home)
-                .join("Applications/Portsage.app/Contents/MacOS/portsage");
+            let user =
+                PathBuf::from(home).join("Applications/Portsage.app/Contents/MacOS/portsage");
+            if user.exists() {
+                return Some(user);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // The Linux build is headless-only and ships as `portsage-server`. The
+        // systemd unit is the expected production install path, but autospawn
+        // still lets `portsage <cmd>` work for users who installed by hand.
+        for candidate in ["/usr/local/bin/portsage-server", "/usr/bin/portsage-server"] {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let user = PathBuf::from(home).join(".local/bin/portsage-server");
             if user.exists() {
                 return Some(user);
             }
@@ -337,9 +363,9 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> Result<(), ClientError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufReader as StdBufReader;
     #[allow(unused_imports)]
     use std::io::{BufRead, Write};
-    use std::io::BufReader as StdBufReader;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
     use std::thread;
@@ -382,7 +408,10 @@ mod tests {
     #[test]
     fn list_all_round_trips_through_mock_server() {
         let (path, _dir) = spawn_mock_server(|req| {
-            assert!(req.contains("\"method\":\"list_all\""), "request was: {req}");
+            assert!(
+                req.contains("\"method\":\"list_all\""),
+                "request was: {req}"
+            );
             r#"{"result":[{"id":1,"name":"alpha","path":null,"range_start":4000,"range_end":4009,"created_at":"t","ports":[]}]}"#.into()
         });
         let client = Client::new(path);
@@ -459,9 +488,8 @@ mod tests {
 
     #[test]
     fn next_range_deserializes_bounds() {
-        let (path, _dir) = spawn_mock_server(
-            |_req| r#"{"result":{"range_start":4010,"range_end":4019}}"#.into(),
-        );
+        let (path, _dir) =
+            spawn_mock_server(|_req| r#"{"result":{"range_start":4010,"range_end":4019}}"#.into());
         let client = Client::new(path);
         let r = client.next_range().unwrap();
         assert_eq!(r.range_start, 4010);
@@ -470,9 +498,8 @@ mod tests {
 
     #[test]
     fn config_snapshot_round_trip() {
-        let (path, _dir) = spawn_mock_server(
-            |_req| r#"{"result":{"base_port":"4000","range_size":"10"}}"#.into(),
-        );
+        let (path, _dir) =
+            spawn_mock_server(|_req| r#"{"result":{"base_port":"4000","range_size":"10"}}"#.into());
         let client = Client::new(path);
         let cfg = client.get_config().unwrap();
         assert_eq!(cfg.base_port, "4000");

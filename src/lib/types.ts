@@ -30,3 +30,60 @@ export interface ProjectStatus {
   created_at: string;
   ports: PortStatus[];
 }
+
+// --- Multi-host (Phase 2) ---
+
+/**
+ * A remote Portsage backend the Mac UI knows about. Mirrors the Rust struct
+ * `db::RemoteBackend` (snake_case fields preserved across the FFI boundary).
+ */
+export interface RemoteBackend {
+  id: number;
+  name: string;
+  ssh_alias: string;
+  remote_socket_path: string;
+  local_socket_path: string;
+  auto_forward_enabled: boolean;
+  created_at: string;
+}
+
+/**
+ * Owned form payload for create/update of a remote backend. Same shape as the
+ * Rust `RemoteBackendForm`.
+ */
+export interface RemoteBackendForm {
+  name: string;
+  ssh_alias: string;
+  remote_socket_path: string;
+  local_socket_path: string;
+  auto_forward_enabled: boolean;
+}
+
+/**
+ * Which backend the UI is currently targeting. Serialized with an internal
+ * tag so the Rust side can deserialize via serde.
+ */
+export type BackendTarget =
+  | { kind: "local" }
+  | { kind: "remote"; name: string };
+
+/**
+ * Lifecycle state of an SSH tunnel for a remote backend.
+ */
+export type TunnelState =
+  | { state: "disconnected" }
+  | { state: "connecting" }
+  | { state: "connected" }
+  | { state: "failed"; reason: string };
+
+/**
+ * Snapshot of a remote backend's tunnel. Emitted by the
+ * `tunnel://state-changed` Tauri event.
+ */
+export interface TunnelStatus {
+  backend_name: string;
+  ssh_alias: string;
+  remote_socket: string;
+  local_socket: string;
+  state: TunnelState;
+}

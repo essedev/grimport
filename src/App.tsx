@@ -11,16 +11,18 @@ import { UIText } from "@/components/ui/UIText";
 import { ToastProvider } from "@/lib/toast";
 import { DialogProvider } from "@/lib/dialog";
 import { useProjects } from "@/features/projects/useProjects";
+import { useBackends } from "@/features/backends/useBackends";
 import type { ProjectStatus } from "@/lib/types";
 
 type View = "project" | "unmanaged" | "settings";
-type SettingsTab = "general" | "integrations" | "data";
+type SettingsTab = "general" | "integrations" | "data" | "backends";
 
 function MainWindow() {
   const {
     projects,
     unmanagedPorts,
     loading,
+    refresh: refreshProjects,
     create,
     remove,
     addPort,
@@ -28,6 +30,13 @@ function MainWindow() {
     killPort,
     killProject,
   } = useProjects();
+  const {
+    target: backendTarget,
+    remotes: remoteBackends,
+    tunnels,
+    setTarget: selectBackend,
+    refresh: refreshBackends,
+  } = useBackends();
   const [selected, setSelected] = useState<ProjectStatus | null>(null);
   const [activeView, setActiveView] = useState<View>("project");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
@@ -65,6 +74,21 @@ function MainWindow() {
           onCreate={create}
           onShowSettings={handleShowSettings}
           onShowUnmanaged={handleShowUnmanaged}
+          backendTarget={backendTarget}
+          remoteBackends={remoteBackends}
+          tunnels={tunnels}
+          onSelectBackend={(t) => {
+            // Switch target, drop any project selected on the previous
+            // backend (its id is meaningless on the new one), and refresh
+            // so the user sees the new backend's project list immediately
+            // rather than waiting for the next polling tick.
+            void selectBackend(t).then((ok) => {
+              if (ok) {
+                setSelected(null);
+                void refreshProjects();
+              }
+            });
+          }}
         />
 
         <main className="flex-1 overflow-y-auto">
@@ -75,7 +99,16 @@ function MainWindow() {
               </UIText>
             </div>
           ) : activeView === "settings" ? (
-            <SettingsPanel tab={settingsTab} onTabChange={setSettingsTab} />
+            <SettingsPanel
+              tab={settingsTab}
+              onTabChange={setSettingsTab}
+              remoteBackends={remoteBackends}
+              tunnels={tunnels}
+              backendTarget={backendTarget}
+              onBackendsChanged={() => {
+                void refreshBackends();
+              }}
+            />
           ) : activeView === "unmanaged" ? (
             <UnmanagedPortsPanel ports={unmanagedPorts} onKill={killPort} />
           ) : currentProject ? (
@@ -89,6 +122,7 @@ function MainWindow() {
               onRemovePort={removePort}
               onKillPort={killPort}
               onKillProject={killProject}
+              backendTarget={backendTarget}
             />
           ) : (
             <WelcomePanel

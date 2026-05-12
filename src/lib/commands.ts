@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectStatus, PortStatus, UnmanagedPort, KillOutcome } from "./types";
+import type {
+  ProjectStatus,
+  PortStatus,
+  UnmanagedPort,
+  KillOutcome,
+  RemoteBackend,
+  RemoteBackendForm,
+  BackendTarget,
+  TunnelStatus,
+} from "./types";
 
 export function listProjects(): Promise<ProjectStatus[]> {
   return invoke("list_projects");
@@ -32,7 +41,7 @@ export function scanPorts(): Promise<number[]> {
   return invoke("scan_ports");
 }
 
-export function getNextRange(): Promise<[number, number]> {
+export function getNextRange(): Promise<{ range_start: number; range_end: number }> {
   return invoke("get_next_range");
 }
 
@@ -56,9 +65,12 @@ export function killPort(port: number): Promise<KillOutcome> {
   return invoke("kill_port", { port });
 }
 
-export function killProject(
-  projectId: number,
-): Promise<Array<[number, KillOutcome]>> {
+export interface KillEntry {
+  port: number;
+  outcome: KillOutcome;
+}
+
+export function killProject(projectId: number): Promise<KillEntry[]> {
   return invoke("kill_project", { projectId });
 }
 
@@ -93,3 +105,62 @@ export function installMcp(mcpDir: string): Promise<void> {
 export function uninstallMcp(): Promise<void> {
   return invoke("uninstall_mcp");
 }
+
+// --- Multi-host backends (Phase 2) ---
+
+export function listRemoteBackends(): Promise<RemoteBackend[]> {
+  return invoke("list_remote_backends");
+}
+
+export function addRemoteBackend(form: RemoteBackendForm): Promise<RemoteBackend> {
+  return invoke("add_remote_backend", { form });
+}
+
+export function updateRemoteBackend(
+  id: number,
+  form: RemoteBackendForm,
+): Promise<RemoteBackend> {
+  return invoke("update_remote_backend", { id, form });
+}
+
+export function removeRemoteBackend(id: number): Promise<void> {
+  return invoke("remove_remote_backend", { id });
+}
+
+export function setRemoteBackendAutoForward(
+  id: number,
+  enabled: boolean,
+): Promise<void> {
+  return invoke("set_remote_backend_auto_forward", { id, enabled });
+}
+
+/**
+ * Probe the remote backend by opening the tunnel and fetching its project
+ * count. The returned number is the count of projects on the remote; errors
+ * are thrown verbatim from the backend (so they can be shown in the UI).
+ */
+export function testRemoteBackend(name: string): Promise<number> {
+  return invoke("test_remote_backend", { name });
+}
+
+export function getCurrentBackend(): Promise<BackendTarget> {
+  return invoke("get_current_backend");
+}
+
+export function setCurrentBackend(target: BackendTarget): Promise<void> {
+  return invoke("set_current_backend", { target });
+}
+
+export function getTunnelStatuses(): Promise<TunnelStatus[]> {
+  return invoke("get_tunnel_statuses");
+}
+
+export function closeTunnel(name: string): Promise<void> {
+  return invoke("close_tunnel", { name });
+}
+
+/**
+ * Tauri event name emitted whenever a remote backend's tunnel state changes.
+ * The payload is a {@link TunnelStatus}.
+ */
+export const TUNNEL_EVENT = "tunnel://state-changed" as const;
