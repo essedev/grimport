@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-12
+
 ### Added (multi-host evolution, see `docs/multi-host-evolution.md`)
 - Linux x86_64 headless server (`portsage-server`): same binary as the macOS app built with `--no-default-features`, drops the Tauri runtime entirely. Includes systemd unit + idempotent `install.sh` in `packaging/linux/`, CI tarball workflow on tag push (`.github/workflows/server-build.yml`), per-OS scanner (macOS lsof, Linux `/proc/net/tcp` + `ss` fallback), XDG paths on Linux (`$XDG_DATA_HOME` for the DB, `$XDG_RUNTIME_DIR` for the socket), `--socket <path>` flag and `PORTSAGE_SOCKET` env override
 - Remote backend in the Mac UI: configure remote Portsage servers via Settings -> Remote backends, switch between Local and Remote in the sidebar dropdown, every existing project/port command routes through the active backend. Backed by `remote_backends` SQLite table, `BackendManager` owning per-backend SSH unix-socket tunnels with state machine and per-backend mutex, `BackendRouter` with persisted current target, 10 new Tauri commands, `tunnel://state-changed` events, `useBackends` hook
