@@ -638,6 +638,43 @@ impl ForwardManager {
 /// and remote-driven port registrations linger un-forwarded.
 pub const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Spawn the auto-sync daemon thread. On startup it runs one pass over
+/// every `remote_backends` row with `auto_forward_enabled = true`, opening
+/// the tunnel + reconciling the forward set. Then it loops every
+/// [`PERIODIC_SYNC_INTERVAL`] until the process exits.
+///
+/// We intentionally don't expose a cancellation handle: the thread is a
+/// daemon, the work it does is idempotent, and process exit is the only
+/// stop condition we care about. App shutdown closes the
+/// Portsage-managed ControlMasters via `ForwardManager::shutdown`; this
+/// thread does not need to participate.
+///
+/// Errors from `sync()` are logged and swallowed - one bad backend (e.g.
+/// tunnel down) must not poison the loop for the others.
+pub fn start_auto_sync(db: Arc<Database>, manager: Arc<ForwardManager>) {
+    std::thread::Builder::new()
+        .name("portsage-forward-sync".to_string())
+        .spawn(move || loop {
+            match db.list_remote_backends() {
+                Ok(backends) => {
+                    for b in backends {
+                        if !b.auto_forward_enabled {
+                            continue;
+                        }
+                        if let Err(e) = manager.sync(&b.name) {
+                            eprintln!("portsage: forward sync failed for {}: {}", b.name, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("portsage: cannot list remote backends for sync: {e}");
+                }
+            }
+            std::thread::sleep(PERIODIC_SYNC_INTERVAL);
+        })
+        .expect("failed to spawn portsage-forward-sync thread");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

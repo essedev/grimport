@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Trash2, Play, Plus, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Trash2, Play, Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { UIText } from "@/components/ui/UIText";
 import { UIButton } from "@/components/ui/UIButton";
 import { UIInput } from "@/components/ui/UIInput";
@@ -9,6 +9,7 @@ import { useToast } from "@/lib/toast";
 import { humanizeError } from "@/lib/errors";
 import * as cmd from "@/lib/commands";
 import type {
+  ForwardExclusion,
   RemoteBackend,
   RemoteBackendForm,
   TunnelState,
@@ -268,9 +269,129 @@ function RemoteBackendRow({
           onChange={(e) => onToggleAutoForward(e.target.checked)}
         />
         <UIText variant="body" className="text-[11px]! text-text-muted">
-          Auto-forward ports (Phase 3)
+          Auto-forward ports
         </UIText>
       </label>
+      <ExcludedPortsSection backend={backend} />
+    </div>
+  );
+}
+
+/**
+ * Collapsible "Excluded ports" sub-section for one remote backend.
+ * Lists ports the user has explicitly blocked from being auto-forwarded
+ * (typically because a local process already owns that port and the user
+ * doesn't want Portsage to fight it). Fetches on expand, refreshes after
+ * each add/remove.
+ */
+function ExcludedPortsSection({ backend }: { backend: RemoteBackend }) {
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<ForwardExclusion[]>([]);
+  const [newPort, setNewPort] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { showError } = useToast();
+
+  const refresh = async () => {
+    try {
+      const rows = await cmd.listForwardExclusions(backend.id);
+      setList(rows);
+    } catch (err) {
+      showError(humanizeError(err));
+    }
+  };
+
+  useEffect(() => {
+    if (open) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const handleAdd = async () => {
+    const portNum = parseInt(newPort, 10);
+    if (Number.isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      showError("Port must be a number between 1 and 65535.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await cmd.addForwardExclusion(backend.id, portNum);
+      setNewPort("");
+      await refresh();
+    } catch (err) {
+      showError(humanizeError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRemove = async (id: number) => {
+    setBusy(true);
+    try {
+      await cmd.removeForwardExclusion(id);
+      await refresh();
+    } catch (err) {
+      showError(humanizeError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pl-[var(--spacing-3)] flex flex-col gap-[var(--spacing-1)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-[var(--spacing-1)] text-text-muted hover:text-text-primary cursor-pointer w-fit"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <UIText variant="body" className="text-[11px]!">
+          Excluded ports {list.length > 0 && open && `(${list.length})`}
+        </UIText>
+      </button>
+      {open && (
+        <div className="pl-[var(--spacing-3)] flex flex-col gap-[var(--spacing-1)]">
+          {list.length === 0 && (
+            <UIText variant="body" className="text-[11px]! text-text-muted">
+              No exclusions. Ports listed here are skipped by auto-forward.
+            </UIText>
+          )}
+          {list.map((ex) => (
+            <div
+              key={ex.id}
+              className="flex items-center justify-between gap-[var(--spacing-2)]"
+            >
+              <UIText variant="mono" className="text-[11px]!">
+                {ex.port}
+              </UIText>
+              <button
+                type="button"
+                onClick={() => handleRemove(ex.id)}
+                disabled={busy}
+                className="text-text-muted hover:text-accent-danger cursor-pointer disabled:opacity-50"
+                aria-label={`Remove exclusion for port ${ex.port}`}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-[var(--spacing-1)]">
+            <UIInput
+              value={newPort}
+              onChange={(e) => setNewPort(e.target.value)}
+              placeholder="Port to exclude"
+              type="number"
+              min={1}
+              max={65535}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleAdd();
+              }}
+            />
+            <UIButton variant="ghost" onClick={handleAdd} disabled={busy || !newPort}>
+              <Plus size={12} aria-hidden="true" />
+              Add
+            </UIButton>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -156,6 +156,12 @@ pub fn run() {
     ));
     let forwards_for_shutdown = forward_manager.clone();
 
+    // Background daemon: startup auto-sync over every backend that has
+    // `auto_forward_enabled = true`, then loop every PERIODIC_SYNC_INTERVAL.
+    // Covers the case where an MCP client on the remote registers a port
+    // without going through the Mac UI - the next tick picks it up.
+    forwards::start_auto_sync(database.clone(), forward_manager.clone());
+
     let mut app = tauri::Builder::default()
         // Single-instance must be registered first: if another Portsage process is
         // already running, this callback fires in the existing process and the new
