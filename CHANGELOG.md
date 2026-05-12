@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (multi-host evolution, see `docs/multi-host-evolution.md`)
+- Linux x86_64 headless server (`portsage-server`): same binary as the macOS app built with `--no-default-features`, drops the Tauri runtime entirely. Includes systemd unit + idempotent `install.sh` in `packaging/linux/`, CI tarball workflow on tag push (`.github/workflows/server-build.yml`), per-OS scanner (macOS lsof, Linux `/proc/net/tcp` + `ss` fallback), XDG paths on Linux (`$XDG_DATA_HOME` for the DB, `$XDG_RUNTIME_DIR` for the socket), `--socket <path>` flag and `PORTSAGE_SOCKET` env override
+- Remote backend in the Mac UI: configure remote Portsage servers via Settings -> Remote backends, switch between Local and Remote in the sidebar dropdown, every existing project/port command routes through the active backend. Backed by `remote_backends` SQLite table, `BackendManager` owning per-backend SSH unix-socket tunnels with state machine and per-backend mutex, `BackendRouter` with persisted current target, 10 new Tauri commands, `tunnel://state-changed` events, `useBackends` hook
+- Auto SSH port forwarding: when a remote backend has registered ports, Portsage opens `ssh -O forward -L <port>:localhost:<port>` against the same ControlMaster the protocol tunnel uses. Three-state port row arrow indicator (active / failed / cancelled) with click-toggle, local-port collision probe with process name + pid in the failure reason, ControlMaster ownership (piggyback on user's `ssh_config` `ControlMaster auto` when available, otherwise open + track our own at `paths::state_dir()/cm-<alias>.sock`), startup auto-sync + 60s periodic safety-net timer (`forwards::start_auto_sync`), per-backend "Excluded ports" sub-UI in Settings, clean shutdown of Portsage-managed ControlMasters on app quit
+- CLI `--backend <name>` flag (also `PORTSAGE_BACKEND` env): the CLI asks the Mac app's socket for the named backend's local-side forwarded socket and connects to it directly. Requires the Tauri app to be running with the tunnel open
+
+### Fixed (during the multi-host live smoke test on the `forge` dev box)
+- Socket file 0600 inside systemd's 0750 `RuntimeDirectory` blocked group access. The scanner now picks 0660 when the parent directory is externally managed (systemd-style shared group install) and keeps 0600 for the per-user XDG install
+- `install.sh` rewrites both `User=` and `Group=` in the systemd unit to the target dev user. The kernel's `__ptrace_may_access(PTRACE_MODE_FSCREDS)` requires `fsuid` AND `fsgid` to match the target process's creds for `/proc/<other_pid>/fd/*` readlinks - with the original `Group=portsage` (gid 987) every port owned by the dev user (gid 1000) showed `?` in the Process column
+
 ## [0.10.0] - 2026-05-11
 
 ### Added

@@ -139,6 +139,8 @@ Plus an install script `packaging/linux/install.sh` that:
 
 Idempotent. Re-run on upgrade.
 
+> **As shipped (divergence discovered during live smoke test, 2026-05-12)**: the `User=portsage Group=portsage` configuration above blocks process-name resolution in the Mac UI. Background: the scanner maps listening ports to processes by reading `/proc/<pid>/fd/*` magic links. The kernel gates that readlink behind `__ptrace_may_access(PTRACE_MODE_FSCREDS)`, which requires the caller's `fsuid` AND `fsgid` to match the target process's creds (not just uid). With `Group=portsage` the service has `fsgid=987`, while the dev user's processes (Vite/Node/Python) have `gid=1000` - mismatch, kernel returns `EACCES`, every port renders as `?` in the UI. `install.sh` therefore `sed`-rewrites `User=` and `Group=` to the target dev user before installing the unit; the template above is left as-is so a multi-tenant operator can manually opt back in (and accept the `?` for cross-user ports). See `packaging/linux/README.md` for the user-facing explanation.
+
 #### 1.6 Bundled CLI parity
 
 The CLI is already cross-platform. Verify: nothing in `crates/portsage-cli` calls macOS-only syscalls or paths. Add a CI job that runs `cargo test -p portsage-cli` on `ubuntu-latest` to catch regressions.
