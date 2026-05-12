@@ -10,21 +10,37 @@ from mcp.server.fastmcp import FastMCP
 
 
 def _socket_path() -> Path:
-    """Return the portsage socket path matching what the Rust app creates.
+    """Return the portsage socket path, matching `portsage_client::default_socket_path`.
 
-    Mirrors `dirs::config_dir()` from the Rust side:
-      - macOS:   ~/Library/Application Support/portsage/portsage.sock
-      - Linux:   ~/.config/portsage/portsage.sock
-      - Windows: %APPDATA%\\portsage\\portsage.sock
+    Precedence:
+      1. ``PORTSAGE_SOCKET`` env var (used for the systemd-managed Linux
+         server socket at ``/run/portsage/portsage.sock`` and for any
+         user-forwarded path on a Mac talking to a remote backend).
+      2. macOS:   ``~/Library/Application Support/portsage/portsage.sock``
+      3. Linux:   ``$XDG_RUNTIME_DIR/portsage/portsage.sock``, falling back
+         to ``/tmp/portsage-<uid>.sock`` so each user on a shared box gets
+         their own socket.
+      4. Windows: ``%APPDATA%/portsage/portsage.sock``
     """
+    override = os.environ.get("PORTSAGE_SOCKET")
+    if override:
+        return Path(override)
+
     home = Path.home()
     if sys.platform == "darwin":
-        base = home / "Library" / "Application Support"
-    elif sys.platform == "win32":
+        return home / "Library" / "Application Support" / "portsage" / "portsage.sock"
+    if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", str(home)))
-    else:
-        base = home / ".config"
-    return base / "portsage" / "portsage.sock"
+        return base / "portsage" / "portsage.sock"
+
+    # Linux and other unix.
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        return Path(runtime_dir) / "portsage" / "portsage.sock"
+    uid = os.geteuid() if hasattr(os, "geteuid") else None
+    if uid is not None:
+        return Path(f"/tmp/portsage-{uid}.sock")
+    return Path("/tmp/portsage.sock")
 
 
 SOCKET_PATH = _socket_path()
