@@ -44,17 +44,21 @@ sudo rm -rf /var/lib/portsage
 sudo userdel portsage && sudo groupdel portsage
 ```
 
-## Known limitation: kill and PID resolution
+## User and group of the running service
 
-`portsage-server` runs as the `portsage` system user. The Linux scanner reads `/proc/net/tcp` (visible to anyone) for the list of listening ports, but mapping those sockets back to PIDs requires reading `/proc/<pid>/fd/`, which is restricted to the process owner.
+The installer patches `User=` and `Group=` in the systemd unit to the target user (`--user <name>` or `$SUDO_USER`) before installing it. The shipped template defaults to `User=portsage Group=portsage` for a multi-tenant setup, but the installer rewrites both lines so the running service has `fsuid` and `fsgid` matching the dev user's primary group.
 
-In practice that means:
+This is **load-bearing for the Process column in the Mac UI**. The scanner that maps listening ports to process names reads `/proc/<other_pid>/fd/*`, which the kernel's `__ptrace_may_access(PTRACE_MODE_FSCREDS)` gates on a match of **both** `fsuid` and `fsgid` against the target process's creds (not just uid). If the service ran as `portsage:portsage` (gid 987) but your `vite` / `node` / `python` processes run as `you:you` (gid 1000), the gid mismatch makes the kernel return `EACCES` on the readlink even though the uid matches - and every port in the UI shows `?` for the process.
 
-- **Reserve / register / list / unmanaged**: work fully. Ports are visible because `/proc/net/tcp` is world-readable.
-- **`kill_port` against another user's process**: fails. Run `portsage kill <port>` as that user, or as root.
-- **Process names in `list_unmanaged`**: shown as `?` for processes owned by other users.
+If you need to revert to a multi-tenant setup later (one service shared by several users), edit `/etc/systemd/system/portsage-server.service`, set `User=portsage Group=portsage`, `systemctl daemon-reload`, restart. Accept that the Process column will read `?` for ports owned by users other than `portsage`.
 
-For full kill/PID visibility on a single-user dev box, you can run the server as your own user instead - either swap `User=portsage` in the unit for your username, or use a per-user systemd unit at `~/.config/systemd/user/portsage-server.service`.
+### When the Process column shows `?`
+
+Even with the installer's default setup, you can hit this:
+
+- **Process owned by a user other than the one the service runs as**: kernel blocks the readlink. The port is still listed as active; only the process name + PID are missing.
+- **`kill_port` against that process**: fails. Run `portsage kill <port>` as that owner, or as root.
+- **Process under a different primary group**: same EACCES path (kernel checks both uid and gid).
 
 ## Manual launch (no systemd)
 

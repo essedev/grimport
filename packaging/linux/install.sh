@@ -88,8 +88,26 @@ echo "    installing /usr/local/bin/portsage (CLI)"
 install -m 0755 "$CLI_BIN" /usr/local/bin/portsage
 
 # --- 3. systemd unit ---
-echo "    installing /etc/systemd/system/portsage-server.service"
-install -m 0644 "$UNIT_FILE" /etc/systemd/system/portsage-server.service
+# Patch the unit's User= and Group= to the target user.
+#
+# Why both: the Linux kernel's `__ptrace_may_access(... PTRACE_MODE_FSCREDS)`
+# - which gates `readlink /proc/<other_pid>/fd/*`, the mechanism the scanner
+# uses to map listening sockets back to process names - requires match on
+# BOTH fsuid and fsgid against the target's creds, not just uid. With
+# User=portsage Group=portsage (the original "system user" design) the
+# service's fsgid would be 987 (the `portsage` group) while the dev user's
+# processes run with gid=1000 (their own group). The mismatch makes the
+# kernel return EACCES on the readlink even though uid matches, and the
+# Process column ends up as "?" for every port. Running the service under
+# the dev user's primary group fixes that for the single-user dev box case.
+# The system `portsage` user/group are still created above for any future
+# multi-tenant setup (where you'd flip the unit back manually).
+echo "    installing /etc/systemd/system/portsage-server.service (User=$TARGET_USER Group=$TARGET_USER)"
+sed -e "s/^User=portsage$/User=$TARGET_USER/" \
+    -e "s/^Group=portsage$/Group=$TARGET_USER/" \
+    "$UNIT_FILE" > /tmp/portsage-server.service.patched
+install -m 0644 /tmp/portsage-server.service.patched /etc/systemd/system/portsage-server.service
+rm -f /tmp/portsage-server.service.patched
 systemctl daemon-reload
 
 # --- 4. Grant socket access ---
