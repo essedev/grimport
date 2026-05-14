@@ -48,7 +48,7 @@
 
 ## v0.6 - Feature parity with competitors
 
-See `FEATURES_TODO.md` for details on each.
+See [feature-proposals.md](feature-proposals.md) for the design of the still-open items.
 
 - [x] **Kill process from the UI** - per-port and per-project (SIGTERM with SIGKILL escalation after 2s)
 - [x] **Open in browser** - for HTTP ports, click opens `localhost:PORT` in the default browser
@@ -66,7 +66,7 @@ See `FEATURES_TODO.md` for details on each.
 
 ## v0.8 - Multi-host (Linux server backend + remote UI + auto-forward)
 
-The full plan lives in [`docs/multi-host-evolution.md`](docs/multi-host-evolution.md). Shipped in 4 phases:
+The full plan lives in [`multi-host-evolution.md`](multi-host-evolution.md). Shipped in 4 phases:
 
 - **Phase 1 - Cross-platform server** (validated live on the `forge` dev box, 2026-05-12): Linux x86_64 headless build (`portsage-server`), scanner abstraction (macOS lsof vs Linux `/proc/net/tcp` + `ss` fallback), XDG paths, systemd unit. Unblocks running portsage on dedicated dev servers and lets remote Claude Code agents talk to a local portsage MCP. Done: scanner abstraction with macOS / Linux impls, XDG path module, `gui` cargo feature gating Tauri so Linux can build headless-only, `--socket` override + `PORTSAGE_SOCKET` env, systemd unit at `packaging/linux/portsage-server.service`, idempotent `packaging/linux/install.sh` (patches `User=`/`Group=` to the target dev user at install time so the kernel's `__ptrace_may_access(PTRACE_MODE_FSCREDS)` match on both `fsuid` and `fsgid` against the dev user's processes - documented in `packaging/linux/README.md`), CI workflows. Remaining: Homebrew-on-Linux integration (low priority, see plan #4.x).
 - **Phase 2 - Remote backend in the UI** (validated live on forge incl. Tauri window, 2026-05-12): Mac UI can configure remote Portsage servers, open SSH local-socket tunnels to them, and run every project/port command against the selected backend. Done: `remote_backends` schema + CRUD, `BackendManager` + `SshTunnel` with state machine and per-backend mutex, `BackendRouter` + `BackendClient` adapter, 10 Tauri commands (CRUD + test + tunnel statuses + current target persistence), `BackendSwitcher` in the sidebar with live status dot via `tunnel://state-changed` events, "Remote backends" tab in Settings with add/test/remove/auto-forward toggle, all existing Tauri commands routed through the active backend, `ProjectDetail` hides Finder/Terminal buttons for Remote, CLI `--backend <name>` flag with `PORTSAGE_BACKEND` env (delegates tunnel lifecycle to the Mac app rather than opening its own), `humanizeError` covers SSH-specific failure modes. Smoke-test bugs caught + fixed: socket file 0600 inside systemd's 0750 RuntimeDirectory blocked group access (commit `87b0334`); systemd `User=portsage Group=portsage` blocked `/proc/<pid>/fd` readlink for processes owned by the dev user because the kernel requires both `fsuid` AND `fsgid` to match (commit `d428c47`). Divergence from plan: the CLI does not open tunnels itself, it reads the local-side forwarded socket path from the Mac app's socket and connects to that - the plan section 2.5 said "opens a tunnel just like the UI does", but cross-process tunnel state would mean two `BackendManager` instances racing on the same SSH child.
@@ -84,8 +84,30 @@ Effort estimate: 2-3 weeks of focused work, shippable incrementally.
 
 This roadmap entry subsumes the Linux support that was listed in v0.7. Windows support remains in v0.7 as a separate concern.
 
-## v0.9 - CLI-driven install + self-update
+## v0.9 - CLI + headless mode (shipped: v0.9.0 / v0.9.1)
 
-- [x] **CLI manages the MCP integration**: `portsage mcp install / uninstall / status`. The four MCP source files (`server.py`, `pyproject.toml`, `uv.lock`, `SKILL.md`) are embedded into the CLI binary via `include_str!` so a Linux tarball install has no missing files, and the install lays them down in `<data_dir>/portsage/mcp/` (Linux: `~/.local/share/portsage/mcp/`, macOS: `~/Library/Application Support/portsage/mcp/`), runs `uv sync`, registers in `~/.claude.json` (or `./.mcp.json` with `--project`), copies the SKILL.md, and adds the 14 tool entries to `~/.claude/settings.json`. All JSON edits go through a parse-or-bail + atomic-tmp-then-rename helper so a corrupt `~/.claude.json` is never silently overwritten. Tests cover round-tripping a synthetic config and ensuring sibling entries are preserved.
+- [x] `portsage` CLI bundled inside `Portsage.app` and exposed on PATH via the Homebrew cask. Full parity with the MCP surface: `list`, `status`, `reserve`, `register`, `remove`, `release`, `scan`, `kill`, `kill-project`, `open`, `config get|set`, `doctor`. Destructive ops require interactive confirmation or `-y`; output modes: human / `--json` / `-q`.
+- [x] `--headless` (`-H`) mode on the Tauri binary: socket-server only, no tray or windows. Used by the CLI to auto-spawn the backend if no instance is running.
+- [x] Unix socket protocol extended from 5 to 14 methods (full GUI parity). MCP server picks up the same 9 new tools.
+- [x] Cargo workspace split: `src-tauri/` + `crates/portsage-client/` (shared wire types + sync client) + `crates/portsage-cli/`.
+
+## v0.10 - UI overhaul (shipped: v0.10.0)
+
+- [x] `WelcomePanel` for the empty-state main window (first-run CTA + checklist; with-projects stat cards).
+- [x] Settings split into three tabs (General / Integrations / Data) with `UITabs` primitive and a `tab` deep-link prop.
+- [x] Sidebar active-port amber dot + dimmed inactive entries, hover states on rows, `warning` (amber) button variant for Power buttons.
+- [x] `aria-label` on every icon-only button, focus rings on `UIPortLink`.
+
+## v0.11 - Multi-host (shipped: v0.11.0, see v0.8 above for the full plan)
+
+- [x] Phase 1: Linux headless server + systemd unit + idempotent installer + CI tarball workflow.
+- [x] Phase 2: Remote backend in the UI (`remote_backends` table, `BackendManager`, `BackendRouter`, sidebar `BackendSwitcher`, live tunnel state events).
+- [x] Phase 3: Auto SSH port forwarding (`ForwardManager`, ControlMaster ownership picker, local-port collision probe, per-backend "Excluded ports" sub-UI, 60s safety-net sync).
+- [x] CLI `--backend <name>` / `PORTSAGE_BACKEND` env (delegates tunnel lifecycle to the Mac app).
+- [ ] Phase 4 (not started): project migration between backends, health dashboard, CLI `portsage backends list / add / remove`, Tailscale host auto-discovery.
+
+## v0.12 - CLI-driven MCP install + self-update (shipped: v0.12.0)
+
+- [x] **`portsage mcp install / uninstall / status`** - canonical install path, works without the GUI running. The four MCP source files (`server.py`, `pyproject.toml`, `uv.lock`, `SKILL.md`) are embedded into the CLI binary via `include_str!` so a Linux tarball install has no missing files. The install extracts them to `<data_dir>/portsage/mcp/` (Linux: `~/.local/share/portsage/mcp/`, macOS: `~/Library/Application Support/portsage/mcp/`), runs `uv sync`, registers in `~/.claude.json` (or `./.mcp.json` with `--project`), copies the SKILL.md, and adds the 14 tool entries to `~/.claude/settings.json`. All JSON edits go through a parse-or-bail + atomic-tmp-then-rename helper so a corrupt `~/.claude.json` is never silently overwritten. Tests cover round-tripping a synthetic config and ensuring sibling entries are preserved.
 - [x] **`portsage self-update`**: compares `env!("CARGO_PKG_VERSION")` against the latest GitHub release tag (fetched via `curl` to avoid pulling a TLS dep into the CLI). On macOS with brew available, runs `brew update && brew upgrade --cask portsage` after a `--yes`-able confirmation. On Linux it just prints the release URL - the binary lives in `/usr/local/bin/` and is held open by a systemd unit, so in-place replacement under sudo isn't worth the risk for one fewer command.
 - [x] **MCP socket path resolution fixed for Linux**: `mcp/server.py` now mirrors `portsage_client::default_socket_path` (env override > macOS Application Support > Linux `$XDG_RUNTIME_DIR` with `/tmp/portsage-<uid>.sock` fallback). The previous `~/.config/portsage/portsage.sock` Linux default never matched the Rust side and would have broken every MCP call on a Linux dev box.

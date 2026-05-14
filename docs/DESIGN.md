@@ -34,6 +34,8 @@ Visual identity and component library for Portsage. Vibe: a wizard's terminal - 
 | `--status-inactive-text` | `#6b6570` | Inactive ports text |
 | `--accent-danger` | `#c45c5c` | Removal, collisions |
 | `--accent-danger-soft` | `#c45c5c15` | Error badge background |
+| `--accent-success` | `#6aa886` | Tunnel connected indicator, success toasts |
+| `--accent-success-soft` | `#6aa88615` | Success badge background |
 
 ## Typography
 

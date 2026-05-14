@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-12
+
+### Added
+- `portsage mcp install / uninstall / status`: canonical CLI path to manage the Claude Code MCP integration, works without the GUI running. The four MCP source files (`server.py`, `pyproject.toml`, `uv.lock`, `SKILL.md`) are embedded into the CLI binary via `include_str!` so a Linux tarball install has no missing files. The install extracts them to `<data_dir>/portsage/mcp/` (Linux: `~/.local/share/portsage/mcp/`, macOS: `~/Library/Application Support/portsage/mcp/`), runs `uv sync`, registers in `~/.claude.json` (or `./.mcp.json` with `--project`), copies the SKILL.md to `~/.claude/skills/portsage/`, and adds the 14 tool entries to `~/.claude/settings.json`. All JSON edits go through a parse-or-bail + atomic-tmp-then-rename helper so a corrupt config is never silently overwritten
+- `portsage self-update`: compares `env!("CARGO_PKG_VERSION")` against the latest GitHub release tag (fetched via `curl` to avoid pulling a TLS dep into the CLI). On macOS with brew available, runs `brew update && brew upgrade --cask portsage` after a confirmation (`-y` to skip). On Linux it prints the release URL rather than overwriting a binary held open by systemd
+
+### Fixed
+- MCP socket path resolution on Linux: `mcp/server.py` now mirrors `portsage_client::default_socket_path` (env override > macOS Application Support > Linux `$XDG_RUNTIME_DIR` with `/tmp/portsage-<uid>.sock` fallback). The previous `~/.config/portsage/portsage.sock` Linux default never matched the Rust side and would have broken every MCP call on a Linux dev box
+
 ## [0.11.0] - 2026-05-12
 
 ### Added (multi-host evolution, see `docs/multi-host-evolution.md`)
@@ -143,6 +152,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - English documentation (README, PROJECT, DESIGN, ROADMAP, FEATURES_TODO, RELEASING) with Italian companions for README and PROJECT
 - MIT License
 
-[Unreleased]: https://github.com/essedev/portsage/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/essedev/portsage/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/essedev/portsage/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/essedev/portsage/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/essedev/portsage/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/essedev/portsage/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/essedev/portsage/compare/v0.8.3...v0.9.0
+[0.8.3]: https://github.com/essedev/portsage/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/essedev/portsage/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/essedev/portsage/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/essedev/portsage/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/essedev/portsage/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/essedev/portsage/compare/v0.6.1...v0.7.1
 [0.6.1]: https://github.com/essedev/portsage/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/essedev/portsage/releases/tag/v0.6.0

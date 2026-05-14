@@ -2,7 +2,7 @@
 
 ## Overview
 
-A macOS menubar app for managing port allocation across projects. See PROJECT.md for the architecture, DESIGN.md for the design system, ROADMAP.md for the roadmap.
+A macOS menubar app for managing port allocation across projects. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architecture, [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) for the SQLite schema, [docs/DESIGN.md](docs/DESIGN.md) for the design system, [docs/ROADMAP.md](docs/ROADMAP.md) for the roadmap, [docs/RELEASING.md](docs/RELEASING.md) for the release process.
 
 ## Active evolution
 
