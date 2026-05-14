@@ -7,7 +7,10 @@ import type { ForwardState, PortStatus } from "@/lib/types";
 
 interface PortRowProps {
   port: PortStatus;
-  onRemove?: (id: number) => void;
+  /** Called with the full PortStatus so the parent can pick the correct
+   *  `(projectName, service)` pair when removing - matches the backend's
+   *  name-keyed wire protocol. */
+  onRemove?: (port: PortStatus) => void;
   onKill?: (port: PortStatus) => void;
   /**
    * Forward state for this port (Phase 3). Provided by `useForwards` when the
@@ -85,7 +88,7 @@ export function PortRow({
             className="opacity-0 group-hover:opacity-100"
             title="Remove port from project"
             aria-label={`Remove ${port.service} (port ${port.port}) from project`}
-            onClick={() => onRemove(port.id)}
+            onClick={() => onRemove(port)}
           >
             <Trash2 size={14} aria-hidden="true" />
           </UIButton>

@@ -51,12 +51,13 @@ export function useProjects() {
   const create = (name: string, path?: string) =>
     run(() => cmd.createProject(name, path));
 
-  const remove = (id: number) => run(() => cmd.deleteProject(id));
+  const remove = (name: string) => run(() => cmd.deleteProject(name));
 
-  const addPort = (projectId: number, service: string, port: number) =>
-    run(() => cmd.addPort(projectId, service, port));
+  const addPort = (projectName: string, service: string, port: number) =>
+    run(() => cmd.addPort(projectName, service, port));
 
-  const removePort = (id: number) => run(() => cmd.removePort(id));
+  const removePort = (projectName: string, service: string) =>
+    run(() => cmd.removePort(projectName, service));
 
   // Kill helpers don't go through `run`: callers need the KillOutcome to
   // decide whether to surface "permission denied" or "process already gone"
@@ -73,10 +74,10 @@ export function useProjects() {
   };
 
   const killProject = async (
-    projectId: number,
+    projectName: string,
   ): Promise<KillEntry[] | null> => {
     try {
-      const result = await cmd.killProject(projectId);
+      const result = await cmd.killProject(projectName);
       await refresh();
       return result;
     } catch (err) {

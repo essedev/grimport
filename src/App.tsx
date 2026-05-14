@@ -114,8 +114,8 @@ function MainWindow() {
           ) : currentProject ? (
             <ProjectDetail
               project={currentProject}
-              onDelete={(id) => {
-                remove(id);
+              onDelete={(name) => {
+                remove(name);
                 setSelected(null);
               }}
               onAddPort={addPort}

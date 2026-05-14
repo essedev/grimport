@@ -20,11 +20,11 @@ import type {
 
 interface ProjectDetailProps {
   project: ProjectStatus;
-  onDelete: (id: number) => void;
-  onAddPort: (projectId: number, service: string, port: number) => void;
-  onRemovePort: (id: number) => void;
+  onDelete: (name: string) => void;
+  onAddPort: (projectName: string, service: string, port: number) => void;
+  onRemovePort: (projectName: string, service: string) => void;
   onKillPort: (port: number) => Promise<KillOutcome | null>;
-  onKillProject: (projectId: number) => Promise<KillEntry[] | null>;
+  onKillProject: (projectName: string) => Promise<KillEntry[] | null>;
   /**
    * Active backend target. Drives display-only choices: when targeting a
    * Remote backend the project's filesystem path lives on the remote host,
@@ -73,7 +73,7 @@ export function ProjectDetail({
       okLabel: "Delete",
       cancelLabel: "Cancel",
     });
-    if (ok) onDelete(project.id);
+    if (ok) onDelete(project.name);
   };
 
   const handleKillSingle = async (target: PortStatus) => {
@@ -113,7 +113,7 @@ export function ProjectDetail({
       cancelLabel: "Cancel",
     });
     if (!ok) return;
-    const results = await onKillProject(project.id);
+    const results = await onKillProject(project.name);
     if (results) reportProjectOutcomes(results);
   };
 
@@ -260,7 +260,7 @@ export function ProjectDetail({
           rangeEnd={project.range_end}
           usedPorts={project.ports.map((p) => p.port)}
           onSubmit={(service, port) => {
-            onAddPort(project.id, service, port);
+            onAddPort(project.name, service, port);
             setShowAddPort(false);
           }}
           onCancel={() => setShowAddPort(false)}
@@ -290,7 +290,7 @@ export function ProjectDetail({
             <PortRow
               key={port.id}
               port={port}
-              onRemove={onRemovePort}
+              onRemove={(p) => onRemovePort(project.name, p.service)}
               onKill={handleKillSingle}
               forward={isRemote ? forwards.byPort[port.port] ?? { state: "cancelled" } : undefined}
               onToggleForward={isRemote ? handleToggleForward : undefined}

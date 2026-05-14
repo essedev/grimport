@@ -105,6 +105,19 @@ impl Database {
         paths::db_path()
     }
 
+    /// Replace the open connection with a fresh one against the same
+    /// on-disk path. Called after an `import_data` so the running app
+    /// observes the new database without a restart.
+    ///
+    /// Holds the same mutex other readers use, so no concurrent query can
+    /// see a half-replaced state.
+    pub fn reopen(&self) -> Result<()> {
+        let mut guard = self.conn();
+        let new_conn = Connection::open(Self::db_path())?;
+        *guard = new_conn;
+        Ok(())
+    }
+
     fn migrate(&self) -> Result<()> {
         let conn = self.conn();
         conn.execute_batch(

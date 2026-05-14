@@ -56,6 +56,15 @@ pub fn socket_path() -> PathBuf {
     runtime_dir().join("portsage.sock")
 }
 
+/// Where the extracted MCP server files live (mirror of
+/// `portsage_cli::mcp::install_dir`). Used by the Tauri-side install flow so
+/// the GUI install and the `portsage mcp install` CLI flow target the same
+/// directory.
+#[allow(dead_code)]
+pub fn mcp_install_dir() -> PathBuf {
+    data_dir().join("mcp")
+}
+
 /// State directory: logs, future caches.
 #[allow(dead_code)]
 pub fn state_dir() -> PathBuf {
@@ -124,6 +133,33 @@ mod tests {
         assert_eq!(
             p.file_name().and_then(|s| s.to_str()),
             Some("portsage.sock")
+        );
+    }
+
+    /// `paths::socket_path` (used by the Tauri server) and
+    /// `portsage_client::default_socket_path` (used by the CLI / MCP server
+    /// when no override is set) must point at the same file - otherwise a
+    /// CLI / MCP client speaks to a socket the server never bound, and every
+    /// call fails with "app not running". This test pins the parity so any
+    /// future drift in either implementation gets caught at `cargo test`.
+    ///
+    /// We clear `PORTSAGE_SOCKET` for the duration so the env override doesn't
+    /// short-circuit the comparison on whoever's CI is running this.
+    #[test]
+    fn socket_path_matches_portsage_client_default() {
+        // SAFETY: tests can race on env vars. Snapshot, clear, compare, restore.
+        let prev = std::env::var_os("PORTSAGE_SOCKET");
+        std::env::remove_var("PORTSAGE_SOCKET");
+        let app_side = socket_path();
+        let client_side = portsage_client::default_socket_path();
+        match prev {
+            Some(v) => std::env::set_var("PORTSAGE_SOCKET", v),
+            None => std::env::remove_var("PORTSAGE_SOCKET"),
+        }
+        assert_eq!(
+            app_side, client_side,
+            "paths::socket_path drifted from portsage_client::default_socket_path \
+             - update both so the CLI/MCP can reach the server"
         );
     }
 }

@@ -1,41 +1,21 @@
-use crate::actions::{self, KillOutcome, PortStatus, ProjectStatus};
+use crate::actions::{KillOutcome, PortStatus, ProjectStatus};
 use crate::backends::{BackendRouter, BackendTarget, RemoteBackendForm, TunnelStatus};
 use crate::db::{Database, ForwardExclusion, RemoteBackend};
 use crate::forwards::{ForwardManager, ForwardStatus};
+use crate::paths;
 use crate::scanner::ActivePort;
 use portsage_client::{ConfigSnapshot, KillEntry, RangeBounds};
-use std::path::Path;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
-
-/// Read and parse a JSON file at `path`. If the file does not exist, returns
-/// an empty object. If the file exists but is malformed, returns Err with a
-/// clear "refusing to overwrite" message. This is the **safety-critical**
-/// helper used by `install_mcp` before merging into the user's `~/.claude.json`
-/// and `~/.claude/settings.json`: falling back to `{}` on parse failure would
-/// silently destroy the user's entire editor config.
-fn parse_existing_or_empty(path: &Path) -> Result<serde_json::Value, String> {
-    if !path.exists() {
-        return Ok(serde_json::json!({}));
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| {
-        format!(
-            "{} appears to be corrupt and cannot be parsed: {}. Refusing to overwrite. \
-             Fix or back up the file manually before retrying.",
-            path.display(),
-            e
-        )
-    })
-}
 
 // === Project & port commands ===
 //
 // These dispatch via `BackendRouter::client()` so the active backend (Local
 // or one of the Remote ones configured in Settings) drives every read and
-// write. The Tauri command signatures still take `i64` IDs because that's
-// what the frontend has cached from a previous list_all - resolution from
-// id to name happens inside the command and travels exactly once.
+// write. Mutating commands take the project *name* directly (the frontend
+// already has it from `list_projects`), so the backend doesn't have to do
+// an id->name round-trip on every write. Names are the canonical handle in
+// the wire protocol anyway, and ids would not match across backends.
 
 #[tauri::command]
 pub fn list_projects(router: State<Arc<BackendRouter>>) -> Result<Vec<ProjectStatus>, String> {
@@ -54,44 +34,30 @@ pub fn create_project(
 }
 
 #[tauri::command]
-pub fn delete_project(router: State<Arc<BackendRouter>>, id: i64) -> Result<(), String> {
+pub fn delete_project(router: State<Arc<BackendRouter>>, name: String) -> Result<(), String> {
     let client = router.client().map_err(|e| e.to_string())?;
-    let projects = client.list_all()?;
-    let proj = projects
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| format!("project {id} not found"))?;
-    client.release_project(&proj.name)
+    client.release_project(&name)
 }
 
 #[tauri::command]
 pub fn add_port(
     router: State<Arc<BackendRouter>>,
-    project_id: i64,
+    project_name: String,
     service: String,
     port: i64,
 ) -> Result<PortStatus, String> {
     let client = router.client().map_err(|e| e.to_string())?;
-    let projects = client.list_all()?;
-    let proj = projects
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project {project_id} not found"))?;
-    client.register_port(&proj.name, &service, port)
+    client.register_port(&project_name, &service, port)
 }
 
 #[tauri::command]
-pub fn remove_port(router: State<Arc<BackendRouter>>, id: i64) -> Result<(), String> {
+pub fn remove_port(
+    router: State<Arc<BackendRouter>>,
+    project_name: String,
+    service: String,
+) -> Result<(), String> {
     let client = router.client().map_err(|e| e.to_string())?;
-    let projects = client.list_all()?;
-    for p in &projects {
-        for port in &p.ports {
-            if port.id == id {
-                return client.remove_port(&p.name, &port.service);
-            }
-        }
-    }
-    Err(format!("port {id} not found"))
+    client.remove_port(&project_name, &service)
 }
 
 #[tauri::command]
@@ -150,15 +116,10 @@ pub async fn kill_port(
 #[tauri::command]
 pub async fn kill_project(
     router: State<'_, Arc<BackendRouter>>,
-    project_id: i64,
+    project_name: String,
 ) -> Result<Vec<KillEntry>, String> {
     let client = router.client().map_err(|e| e.to_string())?;
-    let projects = client.list_all()?;
-    let proj = projects
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("project {project_id} not found"))?;
-    client.kill_project(&proj.name).await
+    client.kill_project(&project_name).await
 }
 
 #[tauri::command]
@@ -195,10 +156,16 @@ pub fn export_data(db: State<Arc<Database>>, dest_path: String) -> Result<(), St
     let db_bytes = std::fs::read(&db_path).map_err(|e| e.to_string())?;
     std::io::Write::write_all(&mut zip, &db_bytes).map_err(|e| e.to_string())?;
 
+    // Propagate config errors instead of substituting defaults: a backup that
+    // silently drops the user's tuning is worse than a failed export.
     zip.start_file("config.json", options)
         .map_err(|e| e.to_string())?;
-    let base_port = db.get_config("base_port").unwrap_or("4000".into());
-    let range_size = db.get_config("range_size").unwrap_or("10".into());
+    let base_port = db
+        .get_config("base_port")
+        .map_err(|e| format!("read base_port: {e}"))?;
+    let range_size = db
+        .get_config("range_size")
+        .map_err(|e| format!("read range_size: {e}"))?;
     let config = serde_json::json!({
         "base_port": base_port,
         "range_size": range_size,
@@ -211,13 +178,17 @@ pub fn export_data(db: State<Arc<Database>>, dest_path: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn import_data(source_path: String) -> Result<(), String> {
+pub fn import_data(db: State<Arc<Database>>, source_path: String) -> Result<(), String> {
     let db_path = Database::db_path();
 
+    // 1. Extract the .portsage zip's portsage.db into a temp file *next to*
+    //    the target so the final rename stays on the same filesystem and is
+    //    atomic. A failure here leaves the existing DB untouched.
     let file = std::fs::File::open(&source_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-
-    let mut db_file = archive.by_name("portsage.db").map_err(|e| e.to_string())?;
+    let mut db_file = archive
+        .by_name("portsage.db")
+        .map_err(|e| format!("archive missing portsage.db: {e}"))?;
     let mut db_bytes = Vec::new();
     std::io::Read::read_to_end(&mut db_file, &mut db_bytes).map_err(|e| e.to_string())?;
     drop(db_file);
@@ -225,7 +196,34 @@ pub fn import_data(source_path: String) -> Result<(), String> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&db_path, &db_bytes).map_err(|e| e.to_string())?;
+    let tmp_path = db_path.with_extension("portsage-import-tmp");
+    std::fs::write(&tmp_path, &db_bytes).map_err(|e| e.to_string())?;
+
+    // 2. Validate: open the temp file as SQLite and run integrity_check. A
+    //    bogus or truncated file fails here instead of corrupting the live DB.
+    let validate = (|| -> rusqlite::Result<String> {
+        let conn = rusqlite::Connection::open(&tmp_path)?;
+        conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+    })();
+    match validate {
+        Ok(s) if s == "ok" => {}
+        Ok(s) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(format!("imported database failed integrity check: {s}"));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(format!("imported file is not a valid SQLite database: {e}"));
+        }
+    }
+
+    // 3. Swap in. Use rename so the cutover is atomic on POSIX.
+    std::fs::rename(&tmp_path, &db_path).map_err(|e| e.to_string())?;
+
+    // 4. Reopen the running connection so the UI observes the imported state
+    //    immediately - without this, the in-memory Connection still points at
+    //    the old (now-replaced) inode and queries continue to return stale rows.
+    db.reopen().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -247,41 +245,37 @@ pub fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Resolve the MCP install dir, populating it from bundled `.dmg` resources
+/// when available so app upgrades (`brew upgrade`) propagate fixes to
+/// `server.py` / `SKILL.md` for users with a pre-existing install.
 #[tauri::command]
 pub fn get_mcp_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let config_mcp = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("portsage")
-        .join("mcp");
+    let install_dir = paths::mcp_install_dir();
 
-    // Always prefer bundled resources when available, overwriting any existing files in
-    // the config dir. This is critical: it lets app upgrades (e.g. brew upgrade) propagate
-    // fixes to server.py / SKILL.md to users who already have a copy from a previous install,
-    // instead of leaving them stuck with stale files.
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let bundled_mcp = resource_dir.join("mcp");
     if bundled_mcp.join("server.py").exists() {
-        std::fs::create_dir_all(&config_mcp).map_err(|e| e.to_string())?;
-        for file in &["server.py", "pyproject.toml", "SKILL.md"] {
+        std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+        for file in &["server.py", "pyproject.toml", "uv.lock", "SKILL.md"] {
             let src = bundled_mcp.join(file);
-            let dst = config_mcp.join(file);
+            let dst = install_dir.join(file);
             if src.exists() {
                 std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
             }
         }
-        return Ok(config_mcp.to_string_lossy().to_string());
+        return Ok(install_dir.to_string_lossy().to_string());
     }
 
-    if config_mcp.join("server.py").exists() {
-        return Ok(config_mcp.to_string_lossy().to_string());
+    if install_dir.join("server.py").exists() {
+        return Ok(install_dir.to_string_lossy().to_string());
     }
 
+    // Dev fallback: source tree's `mcp/` next to the running binary.
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dev_mcp = exe.ancestors().find_map(|p| {
         let candidate = p.join("mcp").join("server.py");
         candidate.exists().then(|| p.join("mcp"))
     });
-
     if let Some(path) = dev_mcp {
         return Ok(path.to_string_lossy().to_string());
     }
@@ -291,103 +285,23 @@ pub fn get_mcp_dir(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn check_mcp_installed() -> Result<bool, String> {
-    let claude_json = dirs::home_dir()
-        .ok_or("cannot find home dir")?
-        .join(".claude.json");
-
-    if !claude_json.exists() {
+    let path = portsage_mcp::Scope::Global
+        .config_path()
+        .map_err(|e| e.to_string())?;
+    if !path.exists() {
         return Ok(false);
     }
-
-    let content = std::fs::read_to_string(&claude_json).map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
+    let parsed = portsage_mcp::parse_existing_or_empty(&path).map_err(|e| e.to_string())?;
     Ok(parsed["mcpServers"]["portsage"].is_object())
 }
 
-/// Tools to allow in the user's `~/.claude/settings.json` when Portsage installs
-/// the MCP. Must stay in sync with the methods exposed by `socket.rs` and the
-/// tools defined in `mcp/server.py`.
-pub(crate) const MCP_TOOL_PERMISSIONS: &[&str] = &[
-    "mcp__portsage__list_all",
-    "mcp__portsage__reserve_range",
-    "mcp__portsage__register_port",
-    "mcp__portsage__release_project",
-    "mcp__portsage__remove_port",
-    "mcp__portsage__list_unmanaged",
-    "mcp__portsage__next_range",
-    "mcp__portsage__get_config",
-    "mcp__portsage__set_config",
-    "mcp__portsage__scan_active",
-    "mcp__portsage__kill_port",
-    "mcp__portsage__kill_project",
-    "mcp__portsage__open_in_browser",
-    "mcp__portsage__find_project_by_path",
-];
-
 #[tauri::command]
 pub fn install_mcp(mcp_dir: String) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("cannot find home dir")?;
     let mcp_dir = std::path::PathBuf::from(&mcp_dir);
-
-    // 1. Write MCP server config to ~/.claude.json
-    let claude_json_path = home.join(".claude.json");
-    let mut claude_json = parse_existing_or_empty(&claude_json_path)?;
-
-    let mcp_dir_str = mcp_dir.to_string_lossy().to_string();
-    claude_json["mcpServers"]["portsage"] = serde_json::json!({
-        "type": "stdio",
-        "command": "uv",
-        "args": ["--directory", mcp_dir_str, "run", "python", "server.py"]
-    });
-
-    std::fs::write(
-        &claude_json_path,
-        serde_json::to_string_pretty(&claude_json).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 2. Install skill
-    let skill_dir = home.join(".claude").join("skills").join("portsage");
-    std::fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
-
-    let skill_source = mcp_dir.join("SKILL.md");
-    let skill_dest = skill_dir.join("SKILL.md");
-    std::fs::copy(&skill_source, &skill_dest).map_err(|e| e.to_string())?;
-
-    // 3. Add tool permissions to ~/.claude/settings.json (same parse-or-bail policy as above)
-    let settings_path = home.join(".claude").join("settings.json");
-    let mut settings = parse_existing_or_empty(&settings_path)?;
-
-    let allow = settings["permissions"]["allow"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let mut allow_set: Vec<String> = allow
-        .iter()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect();
-    for tool in MCP_TOOL_PERMISSIONS {
-        if !allow_set.contains(&tool.to_string()) {
-            allow_set.push(tool.to_string());
-        }
-    }
-    settings["permissions"]["allow"] = serde_json::Value::Array(
-        allow_set
-            .into_iter()
-            .map(serde_json::Value::String)
-            .collect(),
-    );
-
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-
+    portsage_mcp::register_in_claude(portsage_mcp::Scope::Global, &mcp_dir)
+        .map_err(|e| e.to_string())?;
+    portsage_mcp::install_skill(&mcp_dir).map_err(|e| e.to_string())?;
+    portsage_mcp::add_permissions().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -650,119 +564,21 @@ pub fn remove_forward_exclusion(router: State<Arc<BackendRouter>>, id: i64) -> R
 
 #[tauri::command]
 pub fn uninstall_mcp() -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("cannot find home dir")?;
-
-    // 1. Remove from ~/.claude.json
-    let claude_json_path = home.join(".claude.json");
-    if claude_json_path.exists() {
-        let content = std::fs::read_to_string(&claude_json_path).map_err(|e| e.to_string())?;
-        let mut parsed: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        if let Some(servers) = parsed["mcpServers"].as_object_mut() {
-            servers.remove("portsage");
-        }
-        std::fs::write(
-            &claude_json_path,
-            serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?,
-        )
+    portsage_mcp::unregister_from_claude(portsage_mcp::Scope::Global)
         .map_err(|e| e.to_string())?;
-    }
-
-    // 2. Remove skill
-    let skill_dir = home.join(".claude").join("skills").join("portsage");
-    let _ = std::fs::remove_dir_all(&skill_dir);
-
-    // 3. Remove permissions
-    let settings_path = home.join(".claude").join("settings.json");
-    if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        let mut settings: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        if let Some(allow) = settings["permissions"]["allow"].as_array_mut() {
-            allow.retain(|v| {
-                v.as_str()
-                    .map(|s| !s.starts_with("mcp__portsage__"))
-                    .unwrap_or(true)
-            });
-        }
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
+    portsage_mcp::remove_skill().map_err(|e| e.to_string())?;
+    portsage_mcp::remove_permissions().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // --- parse_existing_or_empty ---
-
-    #[test]
-    fn parse_existing_or_empty_returns_empty_object_when_file_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("missing.json");
-        let result = parse_existing_or_empty(&path).unwrap();
-        assert_eq!(result, serde_json::json!({}));
-    }
-
-    #[test]
-    fn parse_existing_or_empty_parses_valid_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        std::fs::write(&path, r#"{"mcpServers": {"foo": {"command": "bar"}}}"#).unwrap();
-        let result = parse_existing_or_empty(&path).unwrap();
-        assert_eq!(result["mcpServers"]["foo"]["command"], "bar");
-    }
-
-    #[test]
-    fn parse_existing_or_empty_bails_on_malformed_json() {
-        // Safety-critical: a broken claude.json must not be silently replaced with {}.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("broken.json");
-        std::fs::write(&path, "{ this is not valid json").unwrap();
-        let err = parse_existing_or_empty(&path).unwrap_err();
-        assert!(
-            err.contains("appears to be corrupt"),
-            "expected 'corrupt' message, got: {err}",
-        );
-        assert!(
-            err.contains("Refusing to overwrite"),
-            "expected refusal message, got: {err}",
-        );
-        assert!(
-            err.contains(&path.display().to_string()),
-            "expected the path to be mentioned in the error, got: {err}",
-        );
-    }
-
-    #[test]
-    fn parse_existing_or_empty_handles_empty_file_as_corrupt() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty.json");
-        std::fs::write(&path, "").unwrap();
-        let err = parse_existing_or_empty(&path).unwrap_err();
-        assert!(err.contains("appears to be corrupt"));
-    }
-
-    #[test]
-    fn parse_existing_or_empty_accepts_empty_object() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty-obj.json");
-        std::fs::write(&path, "{}").unwrap();
-        let result = parse_existing_or_empty(&path).unwrap();
-        assert_eq!(result, serde_json::json!({}));
-    }
-
     #[test]
     fn mcp_tool_permissions_cover_socket_methods() {
-        // The MCP permissions list and the methods dispatched by the socket
-        // must stay in lockstep. The set below is the contract surfaced in
-        // SKILL.md and registered into ~/.claude/settings.json on install.
-        let names: Vec<&str> = MCP_TOOL_PERMISSIONS
+        // The MCP allowlist installed by Portsage and the methods dispatched
+        // by the socket layer must stay in lockstep. This test asserts parity
+        // against the shared `portsage_mcp::MCP_TOOL_PERMISSIONS` constant.
+        let names: Vec<&str> = portsage_mcp::MCP_TOOL_PERMISSIONS
             .iter()
             .map(|s| s.trim_start_matches("mcp__portsage__"))
             .collect();

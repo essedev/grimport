@@ -18,7 +18,7 @@ pub enum CliError {
     ServiceNotInProject(String, String),
     UnknownBackend(String),
     Io(std::io::Error),
-    Mcp(mcp::McpError),
+    Mcp(mcp::CliMcpError),
     SelfUpdate(self_update::SelfUpdateError),
 }
 
@@ -34,9 +34,15 @@ impl From<std::io::Error> for CliError {
     }
 }
 
+impl From<mcp::CliMcpError> for CliError {
+    fn from(e: mcp::CliMcpError) -> Self {
+        CliError::Mcp(e)
+    }
+}
+
 impl From<mcp::McpError> for CliError {
     fn from(e: mcp::McpError) -> Self {
-        CliError::Mcp(e)
+        CliError::Mcp(mcp::CliMcpError::Mcp(e))
     }
 }
 

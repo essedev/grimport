@@ -3,6 +3,17 @@
 //! here must be callable from a plain async/sync Rust context so the CLI
 //! (via the socket) and the GUI (via Tauri commands) get the same behavior
 //! out of a single source of truth.
+//!
+//! Error style: `Result<T, String>` on purpose. Both consumers (Tauri commands
+//! and the socket wire protocol) ship errors as strings to clients that
+//! pattern-match on the *message*, not on a typed variant - the frontend's
+//! `humanizeError` and the MCP server are the existing consumers, plus the
+//! socket protocol freezes the message shape as part of its contract. Adding
+//! a `thiserror` enum here would be transformed back into a string at every
+//! call site without anyone differentiating on the variants, so it stays
+//! stringly-typed deliberately. Submodules that *do* have differentiable
+//! failure modes worth typing (`forwards::ForwardError`, `backends`'
+//! `BackendError`, the CLI's `CliError`) introduce their own typed errors.
 
 use crate::db::{Database, ProjectWithPorts};
 use crate::scanner::{self, ActivePort};

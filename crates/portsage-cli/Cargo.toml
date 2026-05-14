@@ -14,9 +14,11 @@ path = "src/main.rs"
 
 [dependencies]
 portsage-client = { path = "../portsage-client" }
+portsage-mcp = { path = "../portsage-mcp" }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 anstyle = "1"
 anstream = "0.6"
 

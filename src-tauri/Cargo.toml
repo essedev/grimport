@@ -41,6 +41,7 @@ dirs = "6"
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "signal"] }
 portsage-client = { path = "../crates/portsage-client" }
+portsage-mcp = { path = "../crates/portsage-mcp" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

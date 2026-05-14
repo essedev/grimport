@@ -23,20 +23,23 @@ export function createProject(
   return invoke("create_project", { name, path });
 }
 
-export function deleteProject(id: number): Promise<void> {
-  return invoke("delete_project", { id });
+export function deleteProject(name: string): Promise<void> {
+  return invoke("delete_project", { name });
 }
 
 export function addPort(
-  projectId: number,
+  projectName: string,
   service: string,
   port: number,
 ): Promise<PortStatus> {
-  return invoke("add_port", { projectId, service, port });
+  return invoke("add_port", { projectName, service, port });
 }
 
-export function removePort(id: number): Promise<void> {
-  return invoke("remove_port", { id });
+export function removePort(
+  projectName: string,
+  service: string,
+): Promise<void> {
+  return invoke("remove_port", { projectName, service });
 }
 
 export function scanPorts(): Promise<number[]> {
@@ -72,8 +75,8 @@ export interface KillEntry {
   outcome: KillOutcome;
 }
 
-export function killProject(projectId: number): Promise<KillEntry[]> {
-  return invoke("kill_project", { projectId });
+export function killProject(projectName: string): Promise<KillEntry[]> {
+  return invoke("kill_project", { projectName });
 }
 
 export function getConfig(): Promise<{ base_port: string; range_size: string }> {
