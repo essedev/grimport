@@ -131,6 +131,14 @@ export function ProjectDetail({
       case "permission_denied":
         showError(`Cannot stop port ${port}: permission denied (different user?)`);
         break;
+      case "docker_stopped":
+        showSuccess(`Port ${port} container stopped (docker)`);
+        break;
+      case "docker_error":
+        showError(
+          `Cannot stop port ${port}: docker container not found or daemon unavailable`,
+        );
+        break;
     }
   };
 
@@ -145,11 +153,22 @@ export function ProjectDetail({
       showError(`Permission denied for port${denied.length === 1 ? "" : "s"} ${ports}`);
       return;
     }
+    const dockerFailed = results.filter((e) => e.outcome === "docker_error");
+    if (dockerFailed.length > 0) {
+      const ports = dockerFailed.map((e) => e.port).join(", ");
+      showError(
+        `Docker stop failed for port${dockerFailed.length === 1 ? "" : "s"} ${ports}`,
+      );
+      return;
+    }
     const killed = results.filter((e) => e.outcome === "killed").length;
     const terminated = results.filter((e) => e.outcome === "terminated").length;
+    const dockerStopped = results.filter((e) => e.outcome === "docker_stopped").length;
     const parts: string[] = [];
     if (terminated > 0) parts.push(`${terminated} stopped`);
     if (killed > 0) parts.push(`${killed} force-killed`);
+    if (dockerStopped > 0)
+      parts.push(`${dockerStopped} container${dockerStopped === 1 ? "" : "s"} stopped`);
     showSuccess(parts.length > 0 ? parts.join(", ") : "Done");
   };
 

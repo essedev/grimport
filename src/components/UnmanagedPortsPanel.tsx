@@ -41,6 +41,14 @@ export function UnmanagedPortsPanel({ ports, onKill }: UnmanagedPortsPanelProps)
       case "permission_denied":
         showError(`Cannot stop port ${p.port}: permission denied (different user?)`);
         break;
+      case "docker_stopped":
+        showSuccess(`Port ${p.port} container stopped (docker)`);
+        break;
+      case "docker_error":
+        showError(
+          `Cannot stop port ${p.port}: docker container not found or daemon unavailable`,
+        );
+        break;
     }
   };
 

@@ -13,7 +13,9 @@ export type KillOutcome =
   | "terminated"
   | "killed"
   | "not_active"
-  | "permission_denied";
+  | "permission_denied"
+  | "docker_stopped"
+  | "docker_error";
 
 export interface UnmanagedPort {
   port: number;

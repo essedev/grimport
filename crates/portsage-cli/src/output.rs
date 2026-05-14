@@ -279,6 +279,8 @@ fn outcome_label(outcome: KillOutcome) -> &'static str {
         KillOutcome::Killed => "killed",
         KillOutcome::NotActive => "not_active",
         KillOutcome::PermissionDenied => "permission_denied",
+        KillOutcome::DockerStopped => "docker_stopped",
+        KillOutcome::DockerError => "docker_error",
     }
 }
 
@@ -288,5 +290,7 @@ fn outcome_human(outcome: KillOutcome) -> (Style, &'static str) {
         KillOutcome::Killed => (yellow(), "killed (forced after grace)"),
         KillOutcome::NotActive => (dim(), "nothing was listening"),
         KillOutcome::PermissionDenied => (red(), "permission denied"),
+        KillOutcome::DockerStopped => (green(), "container stopped (docker)"),
+        KillOutcome::DockerError => (red(), "docker stop failed (no matching container or daemon down)"),
     }
 }

@@ -34,6 +34,12 @@ pub struct ActivePort {
 }
 
 /// Result of a kill attempt against a single PID.
+///
+/// `DockerStopped` and `DockerError` are emitted when the listening PID
+/// belongs to a Docker port-forwarding proxy (`com.docker.backend`,
+/// `vpnkit`, `docker-proxy`): we cannot kill the proxy without nuking
+/// every other container's published port, so the action resolves the
+/// host port to its container and calls `docker stop` instead.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KillOutcome {
@@ -41,6 +47,8 @@ pub enum KillOutcome {
     Killed,
     NotActive,
     PermissionDenied,
+    DockerStopped,
+    DockerError,
 }
 
 /// One entry returned by `kill_project`: the registered port that was active

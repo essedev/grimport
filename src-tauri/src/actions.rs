@@ -27,6 +27,21 @@ pub use portsage_client::{KillOutcome, PortStatus, ProjectStatus};
 /// to flush and exit cleanly, short enough that the UI doesn't feel stuck.
 pub const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Process names whose PID is a Docker port-forwarding proxy. On macOS every
+/// published container port shows up in `lsof -iTCP -sTCP:LISTEN` as one of
+/// these PIDs - SIGTERM'ing it would tear down every container at once, so
+/// the action layer detects them and re-routes via `docker stop`.
+const DOCKER_PROXY_PROCESSES: &[&str] = &[
+    // Modern Docker Desktop on macOS.
+    "com.docker.backend",
+    "Docker",
+    // Legacy Docker for Mac.
+    "vpnkit",
+    "com.docker.vpnkit",
+    // Linux native docker engine.
+    "docker-proxy",
+];
+
 pub fn enrich_with_status(
     projects: Vec<ProjectWithPorts>,
     active_ports: &[ActivePort],
@@ -207,12 +222,81 @@ pub async fn kill_pid_with_escalation(pid: i64) -> KillOutcome {
     }
 }
 
+pub fn is_docker_proxy(process: &str) -> bool {
+    DOCKER_PROXY_PROCESSES
+        .iter()
+        .any(|p| process.eq_ignore_ascii_case(p))
+}
+
+/// Parse `docker ps --format '{{.ID}}'` stdout into a list of container IDs.
+/// Trims whitespace and drops empty lines. Pure function so it can be tested
+/// without invoking docker.
+pub fn parse_docker_ps_ids(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Resolve the host `port` to the container(s) publishing it and call
+/// `docker stop` on each. Returns `DockerStopped` on success, `DockerError`
+/// when docker is unavailable, no container matches the port, or the stop
+/// command failed. `docker stop --time` handles its own SIGTERM->SIGKILL
+/// escalation so we don't replicate `kill_pid_with_escalation` here.
+async fn stop_docker_container_for_port(port: i64) -> KillOutcome {
+    let filter = format!("publish={}", port);
+    let ps = std::process::Command::new("docker")
+        .args([
+            "ps",
+            "--filter",
+            &filter,
+            "--format",
+            "{{.ID}}",
+            "--no-trunc",
+        ])
+        .output();
+    let ids = match ps {
+        Ok(o) if o.status.success() => parse_docker_ps_ids(&String::from_utf8_lossy(&o.stdout)),
+        _ => return KillOutcome::DockerError,
+    };
+    if ids.is_empty() {
+        return KillOutcome::DockerError;
+    }
+    let timeout = KILL_GRACE.as_secs().to_string();
+    let mut any_ok = false;
+    for id in ids {
+        let stop = std::process::Command::new("docker")
+            .args(["stop", "--time", &timeout, &id])
+            .output();
+        if matches!(stop, Ok(o) if o.status.success()) {
+            any_ok = true;
+        }
+    }
+    if any_ok {
+        KillOutcome::DockerStopped
+    } else {
+        KillOutcome::DockerError
+    }
+}
+
+/// Single entry point for "free this host port". Detects docker-proxy
+/// listeners and routes to `docker stop`; otherwise falls through to the
+/// generic SIGTERM+grace+SIGKILL path.
+async fn kill_active_port(ap: ActivePort) -> KillOutcome {
+    if is_docker_proxy(&ap.process) {
+        return stop_docker_container_for_port(ap.port).await;
+    }
+    kill_pid_with_escalation(ap.pid).await
+}
+
 pub async fn kill_port_action(port: i64) -> KillOutcome {
     let active = scanner::scan_active_ports_detailed();
     let Some(target) = active.into_iter().find(|p| p.port == port) else {
         return KillOutcome::NotActive;
     };
-    kill_pid_with_escalation(target.pid).await
+    kill_active_port(target).await
 }
 
 pub async fn kill_project_action(
@@ -236,7 +320,10 @@ pub async fn kill_project_action(
 
     let handles: Vec<_> = active
         .into_iter()
-        .map(|ap| tokio::spawn(async move { (ap.port, kill_pid_with_escalation(ap.pid).await) }))
+        .map(|ap| {
+            let port = ap.port;
+            tokio::spawn(async move { (port, kill_active_port(ap).await) })
+        })
         .collect();
 
     let mut results = Vec::with_capacity(handles.len());
@@ -411,6 +498,51 @@ mod tests {
     fn is_permission_error_rejects_other_failures() {
         assert!(!is_permission_error("kill: (12345) - No such process"));
         assert!(!is_permission_error(""));
+    }
+
+    // --- docker proxy detection ---
+
+    #[test]
+    fn is_docker_proxy_matches_known_processes() {
+        assert!(is_docker_proxy("com.docker.backend"));
+        assert!(is_docker_proxy("Com.Docker.Backend")); // case-insensitive
+        assert!(is_docker_proxy("vpnkit"));
+        assert!(is_docker_proxy("com.docker.vpnkit"));
+        assert!(is_docker_proxy("docker-proxy"));
+        assert!(is_docker_proxy("Docker"));
+    }
+
+    #[test]
+    fn is_docker_proxy_rejects_unrelated_processes() {
+        assert!(!is_docker_proxy("node"));
+        assert!(!is_docker_proxy("python"));
+        assert!(!is_docker_proxy("postgres"));
+        // Partial match must not trigger: "dockerd" is the daemon, not a
+        // port-proxy; we never want to SIGTERM it nor route it through the
+        // container-resolution path (it doesn't publish ports on the host).
+        assert!(!is_docker_proxy("dockerd"));
+        // Random docker-named binary in a user's PATH must not be considered
+        // a proxy either - we explicitly enumerate the proxies we know about.
+        assert!(!is_docker_proxy("docker-compose"));
+        assert!(!is_docker_proxy(""));
+    }
+
+    #[test]
+    fn parse_docker_ps_ids_extracts_one_per_line() {
+        let stdout = "abc123\ndef456\n";
+        assert_eq!(parse_docker_ps_ids(stdout), vec!["abc123", "def456"]);
+    }
+
+    #[test]
+    fn parse_docker_ps_ids_trims_and_skips_blanks() {
+        let stdout = "  abc123  \n\n  def456\n\n";
+        assert_eq!(parse_docker_ps_ids(stdout), vec!["abc123", "def456"]);
+    }
+
+    #[test]
+    fn parse_docker_ps_ids_empty_when_no_match() {
+        assert!(parse_docker_ps_ids("").is_empty());
+        assert!(parse_docker_ps_ids("\n\n   \n").is_empty());
     }
 
     // --- remove_port_by_service ---
