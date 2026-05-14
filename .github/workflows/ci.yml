@@ -28,11 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # actions-rust-lang installs the toolchain and rewrites the cargo/rustc
+      # shims so they always proxy to the active toolchain - dtolnay's variant
+      # left stale shims when combined with a restored rust-cache, surfacing
+      # as `cargo build` invoking `rustup-init` instead of cargo proper.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
 
       # The Tauri build.rs reads tauri.conf.json's `externalBin` section and
       # fails if the staged sidecar binary is missing - even for `cargo test`.

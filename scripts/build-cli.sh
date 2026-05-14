@@ -20,9 +20,11 @@ if [ -z "$TARGET" ]; then
 fi
 if [ -z "$TARGET" ]; then
     # `rustup show active-toolchain` prints e.g. "stable-aarch64-apple-darwin (default)".
+    # Strip the leading channel/version (stable, beta, nightly, 1.85.0, ...)
+    # so what remains is the bare host triple.
     TARGET="$(rustup show active-toolchain 2>/dev/null \
         | awk '{print $1}' \
-        | grep -oE '[a-z0-9_]+-[a-zA-Z0-9_]+-[a-zA-Z0-9_]+(-[a-zA-Z0-9_]+)?$' \
+        | sed -E 's/^(stable|beta|nightly|[0-9]+\.[0-9]+\.[0-9]+)-//' \
         || true)"
 fi
 if [ -z "$TARGET" ] && [ "$(uname -s)" = "Darwin" ]; then
