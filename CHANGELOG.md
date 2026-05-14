@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-14
+
+### Fixed
+- `import_data` is now atomic: the imported SQLite blob is written to a sibling tmp path, validated via `PRAGMA integrity_check`, then renamed over the live database. A corrupt or truncated `.portsage` archive now fails cleanly instead of clobbering the running database
+- After `import_data` the running app reopens its `Arc<Database>` connection (new `Database::reopen`) so the UI observes the imported state without an app restart - the previous in-memory connection still pointed at the replaced inode and was returning stale rows
+- `export_data` now propagates the `get_config` errors instead of substituting hardcoded `"4000"` / `"10"` defaults. A silent default in a backup file is worse than a failed export
+- MCP install / uninstall from the Tauri Settings panel now go through the same atomic-tmp-then-rename helper used by the CLI - a process kill mid-write can no longer leave the user with a half-truncated `~/.claude.json`
+
+### Changed
+- Project / port commands (`delete_project`, `add_port`, `remove_port`, `kill_project`) now take the project name directly. The previous id-based signatures triggered a full `list_all` round-trip on every write to resolve the id; the frontend already had the name. This is a Tauri command surface change only - the socket wire protocol is unchanged
+- Tauri MCP install / uninstall delegate to the new `portsage-mcp` crate, eliminating the duplicate implementation that lived in `commands.rs`. The CLI (`portsage mcp install`) uses the same crate, so the two paths cannot drift again
+
+### Internal
+- New `crates/portsage-mcp` workspace member owns the Claude config / skill / permissions logic shared between the GUI and CLI installers
+- `paths::tests::socket_path_matches_portsage_client_default` pins parity between `paths::socket_path` (backend) and `portsage_client::default_socket_path` (CLI / MCP client) so any future drift is caught at `cargo test`
+- `commands.rs` no longer calls `dirs::*` directly - all path resolution goes through `paths.rs` per the CLAUDE.md rule
+- `--font-pixel` design token (dead) removed from `index.css`; `--accent-success` (in use but undocumented) added to `docs/DESIGN.md`
+- Documentation restructured: `ARCHITECTURE`, `DESIGN`, `ROADMAP`, `RELEASING`, `feature-proposals` moved under `docs/`; new `docs/DATABASE_SCHEMA.md`
+
 ## [0.12.0] - 2026-05-12
 
 ### Added
@@ -152,7 +171,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - English documentation (README, PROJECT, DESIGN, ROADMAP, FEATURES_TODO, RELEASING) with Italian companions for README and PROJECT
 - MIT License
 
-[Unreleased]: https://github.com/essedev/portsage/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/essedev/portsage/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/essedev/portsage/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/essedev/portsage/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/essedev/portsage/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/essedev/portsage/compare/v0.9.1...v0.10.0
