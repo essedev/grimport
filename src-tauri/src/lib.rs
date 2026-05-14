@@ -1,8 +1,15 @@
 mod actions;
+// `backends` and `forwards` carry the multi-host plumbing - SSH tunnel
+// management, BackendRouter, ForwardManager - which is only consumed by the
+// GUI lane (run() + commands.rs). The headless Linux server does not route
+// to remote backends nor open local forwards, so on `--no-default-features`
+// these modules would compile into dead code; gate them at the boundary.
+#[cfg(feature = "gui")]
 mod backends;
 #[cfg(feature = "gui")]
 mod commands;
 mod db;
+#[cfg(feature = "gui")]
 mod forwards;
 mod paths;
 mod scanner;

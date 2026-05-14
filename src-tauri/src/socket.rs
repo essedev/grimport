@@ -790,6 +790,10 @@ mod tests {
 
     // --- get_remote_backend ---
 
+    // Uses `Database::create_remote_backend`, which lives in the GUI-gated
+    // CRUD block - the headless server only needs to *look up* backends, not
+    // create them.
+    #[cfg(feature = "gui")]
     #[tokio::test]
     async fn get_remote_backend_returns_match() {
         let db = fresh_db();

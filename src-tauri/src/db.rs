@@ -40,6 +40,7 @@ pub use portsage_client::RemoteBackend;
 /// Fields a caller supplies when creating or updating a remote backend.
 /// Wrapping the inputs keeps the CRUD method signatures readable when more
 /// optional fields are added later.
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub struct RemoteBackendInput<'a> {
     pub name: &'a str,
@@ -51,6 +52,7 @@ pub struct RemoteBackendInput<'a> {
 
 /// A port the user has explicitly blocked from auto-forwarding for a given
 /// remote backend. Phase 3 of the multi-host evolution.
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForwardExclusion {
     pub id: i64,
@@ -111,6 +113,7 @@ impl Database {
     ///
     /// Holds the same mutex other readers use, so no concurrent query can
     /// see a half-replaced state.
+    #[cfg(feature = "gui")]
     pub fn reopen(&self) -> Result<()> {
         let mut guard = self.conn();
         let new_conn = Connection::open(Self::db_path())?;
@@ -357,8 +360,33 @@ impl Database {
         Ok(())
     }
 
-    // --- remote_backends ---
+    /// Looked up from the socket dispatcher even in the headless server build
+    /// (the `get_remote_backend` wire method), so this single accessor lives
+    /// outside the GUI-gated block. The rest of the multi-host CRUD is only
+    /// reachable from the Mac UI's commands and stays gated below.
+    pub fn get_remote_backend_by_name(&self, name: &str) -> Result<Option<RemoteBackend>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, ssh_alias, remote_socket_path, local_socket_path, \
+                    auto_forward_enabled, created_at \
+             FROM remote_backends WHERE name = ?1",
+        )?;
+        let mut rows = stmt.query(params![name])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row_to_remote_backend(row)?)),
+            None => Ok(None),
+        }
+    }
+}
 
+// --- multi-host CRUD ---
+// Remote backends + per-(backend, port) forward exclusions. Only the GUI
+// consumes these (via backends.rs / forwards.rs / commands.rs); the headless
+// Linux server never routes to a remote and never opens local forwards.
+// `get_remote_backend_by_name` is the one exception (sits above) because the
+// socket dispatcher exposes a corresponding wire method.
+#[cfg(feature = "gui")]
+impl Database {
     pub fn create_remote_backend(&self, input: RemoteBackendInput<'_>) -> Result<RemoteBackend> {
         validate_remote_backend_input(&input)?;
         let conn = self.conn();
@@ -389,20 +417,6 @@ impl Database {
             .query_map([], row_to_remote_backend)?
             .collect::<Result<Vec<_>>>()?;
         Ok(rows)
-    }
-
-    pub fn get_remote_backend_by_name(&self, name: &str) -> Result<Option<RemoteBackend>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, name, ssh_alias, remote_socket_path, local_socket_path, \
-                    auto_forward_enabled, created_at \
-             FROM remote_backends WHERE name = ?1",
-        )?;
-        let mut rows = stmt.query(params![name])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row_to_remote_backend(row)?)),
-            None => Ok(None),
-        }
     }
 
     pub fn update_remote_backend(
@@ -516,6 +530,7 @@ impl Database {
 
 }
 
+#[cfg(feature = "gui")]
 fn row_to_forward_exclusion(row: &rusqlite::Row<'_>) -> Result<ForwardExclusion> {
     Ok(ForwardExclusion {
         id: row.get(0)?,
@@ -525,6 +540,7 @@ fn row_to_forward_exclusion(row: &rusqlite::Row<'_>) -> Result<ForwardExclusion>
     })
 }
 
+#[cfg(feature = "gui")]
 fn validate_remote_backend_input(input: &RemoteBackendInput<'_>) -> Result<()> {
     fn fail(msg: &str) -> Result<()> {
         Err(rusqlite::Error::SqliteFailure(
@@ -762,7 +778,13 @@ mod tests {
         );
     }
 
-    // --- remote_backends CRUD ---
+    // --- remote_backends + forward_exclusions CRUD ---
+    // Only compiled with the GUI feature; the headless Linux server doesn't
+    // expose this API surface and the corresponding Database methods are
+    // gated above.
+    #[cfg(feature = "gui")]
+    mod multi_host {
+    use super::*;
 
     fn input<'a>(name: &'a str, alias: &'a str) -> RemoteBackendInput<'a> {
         RemoteBackendInput {
@@ -990,5 +1012,6 @@ mod tests {
         db.add_forward_exclusion(b.id, 4061).unwrap();
         db.delete_remote_backend(b.id).unwrap();
         assert!(db.list_forward_exclusions(b.id).unwrap().is_empty());
+    }
     }
 }
